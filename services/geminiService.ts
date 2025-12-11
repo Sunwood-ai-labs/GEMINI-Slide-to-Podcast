@@ -94,17 +94,20 @@ export const generateSpeech = async (
 ): Promise<GeneratedAudio> => {
   const ai = getClient();
   
+  // Remove slide markers for TTS generation to avoid reading them aloud
+  // Handles [SLIDE 1], [**SLIDE 1**], etc.
+  const cleanText = text.replace(/\[(?:\*\*)?SLIDE\s+\d+(?:\*\*)?\]/gi, '').trim();
+
   // Determine if the text is already in script format (Host: ... Expert: ...)
-  const isScript = text.includes('Host:') || text.includes('Expert:');
+  const isScript = cleanText.includes('Host:') || cleanText.includes('Expert:');
   
   // If no expert voice provided, pick a default generic one (though app usually provides one)
   const safeExpertVoice = expertVoice || 'Kore';
 
   // If it's a script, we send it as is. If it's raw text, we wrap it in a speaker label.
-  // We prefer the script format for 2-person podcasts.
   const inputContents = isScript 
-    ? text 
-    : `Host: ${text}`;
+    ? cleanText 
+    : `Host: ${cleanText}`;
 
   const voiceConfig = {
     multiSpeakerVoiceConfig: {
@@ -176,23 +179,32 @@ export const generateScriptFromPDF = async (
     【設定】
     ${personalityDescription}
 
+    【構造とマーカー（重要）】
+    **話している対象のスライドが変わるタイミングで、必ず \`[SLIDE X]\` （Xはページ番号1, 2...）というマーカーを挿入してください。**
+    例:
+    [SLIDE 1]
+    Host: こんにちは、今回のテーマはこちらです。
+    Expert: 面白そうですね。
+    [SLIDE 2]
+    Host: さて、まずは現状の課題から見ていきましょう。
+
     【絶対に守るべき禁止事項】
     1. **視覚的描写の完全禁止**:
-       - 「表紙が美しいですね」「青い背景が...」「文字が大きく...」「この図のレイアウトは...」といった、スライドの見た目・デザイン・色・配置に関する発言は**絶対にしないでください**。
-       - リスナーにとって「見た目の情報」は不要です。「そこに何が書いてあるか」「それが何を意味するか」だけが必要です。
+       - 「表紙が美しいですね」「青い背景が...」「文字が大きく...」といった、スライドの見た目に関する発言は**絶対にしないでください**。
+       - 「そこに何が書いてあるか」「それが何を意味するか」という**中身**だけを語ってください。
     2. **メタ発言の禁止**:
-       - 「スライドの右側には」「左下のグラフ」といった位置関係の指示も極力避けてください。「このグラフは」で十分です。
+       - 「スライドの右側には」「次のページに行きましょう」といった事務的な指示は避け、自然な会話の流れでトピックを移行させてください。
 
     【指示: 本質の深掘り】
     1. **意味を問う**:
        - Host: 単に読み上げるのではなく、「これってつまりどういうこと？」「なぜこれが重要なの？」と問うてください。
-       - Expert: キャッチコピーやデータの裏にある「企業の意図」「市場への影響」「技術的な革新性」を推測して解説してください。
-    2. **自然な会話**:
-       - 講義調ではなく、ラジオのトーク番組のように。
+       - Expert: データの裏にある「企業の意図」「市場への影響」を推測して解説してください。
 
     【フォーマット】
+    [SLIDE 1]
     Host: [セリフ]
     Expert: [セリフ]
+    [SLIDE 2]
     ...
   `;
 
@@ -224,13 +236,13 @@ export const dramatizeText = async (text: string, styleInstruction?: string): Pr
   
   const prompt = `
     以下のポッドキャスト台本を、指定されたスタイルに合わせてリライト（推敲）してください。
-    ただし、**「Host:」と「Expert:」の対話形式は必ず維持してください。**
+    ただし、以下のルールを厳守してください。
+
+    1. **マーカーの維持**: \`[SLIDE 1]\`, \`[SLIDE 2]\` などのスライドマーカーは、**位置を変えずにそのまま残してください**。これはシステムがスライドを切り替えるために必須です。
+    2. **対話形式の維持**: \`Host:\` と \`Expert:\` の形式を守ってください。
+    3. **視覚描写の削除**: 「デザイン」「色」「レイアウト」への言及はすべて削除し、本質の議論に置き換えてください。
 
     スタイル指示: ${styleInstruction}
-    
-    【修正ルール】
-    1. もし台本の中に「デザイン」「色」「レイアウト」「見た目」に関する言及があれば、**すべて削除**し、内容の実質的な議論に書き換えてください。
-    2. 会話のテンポを良くし、感情を豊かにしてください。
     
     入力テキスト:
     "${text}"
