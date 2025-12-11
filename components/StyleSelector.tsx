@@ -11,6 +11,7 @@ interface StyleSelectorProps {
   selectedStyle: IntroStyle;
   onSelect: (style: IntroStyle) => void;
   onCustomize: () => void;
+  isCollapsed: boolean;
 }
 
 interface StyleButtonProps {
@@ -18,26 +19,31 @@ interface StyleButtonProps {
   isSelected: boolean;
   onClick: () => void;
   effectiveAvatarSrc?: string;
+  isCollapsed: boolean;
 }
 
 const StyleButton: React.FC<StyleButtonProps> = ({ 
   style, 
   isSelected, 
   onClick,
-  effectiveAvatarSrc
+  effectiveAvatarSrc,
+  isCollapsed
 }) => {
   const [imgError, setImgError] = useState(false);
 
   return (
     <button
       onClick={onClick}
+      title={isCollapsed ? style.name : undefined}
       className={`
-        group relative flex items-center gap-4 p-6 text-left border-b-4 border-bauhaus-black transition-all
+        group relative flex items-center transition-all border-b-4 border-bauhaus-black
+        ${isCollapsed ? 'justify-center p-4' : 'gap-4 p-6 text-left'}
         ${isSelected ? 'bg-bauhaus-black text-white' : 'hover:bg-gray-100 text-bauhaus-black'}
       `}
     >
       <div className={`
-        w-12 h-12 flex-shrink-0 flex items-center justify-center border-4 border-current overflow-hidden
+        w-12 h-12 flex-shrink-0 flex items-center justify-center border-4 border-current overflow-hidden transition-transform
+        ${isSelected && !isCollapsed ? 'scale-110' : ''}
         ${isSelected ? 'bg-white text-black' : getColorClass(style.color, false)}
       `}>
         {effectiveAvatarSrc && !imgError ? (
@@ -51,17 +57,24 @@ const StyleButton: React.FC<StyleButtonProps> = ({
           getIcon(style.icon, "w-6 h-6")
         )}
       </div>
-      <div className="min-w-0">
-        <div className="font-bold uppercase text-lg leading-tight mb-1">{style.name}</div>
-      </div>
+      
+      {!isCollapsed && (
+        <div className="min-w-0">
+          <div className="font-bold uppercase text-lg leading-tight mb-1">{style.name}</div>
+        </div>
+      )}
+      
       {isSelected && (
-        <div className="absolute right-4 w-4 h-4 bg-white rounded-full animate-pulse flex-shrink-0"></div>
+        <div className={`
+          absolute bg-white rounded-full animate-pulse flex-shrink-0
+          ${isCollapsed ? 'top-2 right-2 w-2 h-2' : 'right-4 w-4 h-4'}
+        `}></div>
       )}
     </button>
   );
 };
 
-export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onSelect, onCustomize }) => {
+export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onSelect, onCustomize, isCollapsed }) => {
   const [loadedAvatars, setLoadedAvatars] = useState<Record<string, string>>({});
 
   // Load thumbnails via fetch to bypass potential img tag static serving issues
@@ -106,13 +119,16 @@ export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onS
               isSelected={selectedStyle.id === style.id}
               onClick={() => onSelect(style)}
               effectiveAvatarSrc={loadedAvatars[style.id] || style.avatarSrc}
+              isCollapsed={isCollapsed}
             />
           ))}
 
           <button
             onClick={onCustomize}
+            title={isCollapsed ? 'カスタム作成' : undefined}
             className={`
-              group relative flex items-center gap-4 p-6 text-left border-b-4 border-bauhaus-black transition-all
+              group relative flex items-center transition-all border-b-4 border-bauhaus-black
+              ${isCollapsed ? 'justify-center p-4' : 'gap-4 p-6 text-left'}
               ${selectedStyle.id === 'custom' ? 'bg-bauhaus-yellow text-black' : 'hover:bg-gray-100 text-bauhaus-black'}
             `}
           >
@@ -122,11 +138,16 @@ export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onS
                 `}>
                   {getIcon('plus', "w-6 h-6")}
                 </div>
-                <div className="min-w-0">
-                  <div className="font-bold uppercase text-lg leading-tight mb-1">カスタム作成</div>
-                </div>
+                {!isCollapsed && (
+                    <div className="min-w-0">
+                    <div className="font-bold uppercase text-lg leading-tight mb-1">カスタム作成</div>
+                    </div>
+                )}
                 {selectedStyle.id === 'custom' && (
-                  <div className="absolute right-4 w-4 h-4 bg-black rounded-full animate-pulse flex-shrink-0"></div>
+                  <div className={`
+                    absolute bg-black rounded-full animate-pulse flex-shrink-0
+                    ${isCollapsed ? 'top-2 right-2 w-2 h-2' : 'right-4 w-4 h-4'}
+                  `}></div>
                 )}
           </button>
 

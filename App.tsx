@@ -27,17 +27,6 @@ const Footer: React.FC<{ className?: string }> = ({ className }) => (
   </div>
 );
 
-const getFlagEmoji = (countryCode: string) => {
-  if (!countryCode || countryCode.length !== 2 || !/^[A-Z]+$/.test(countryCode.toUpperCase())) {
-    return '🌐';
-  }
-  const codePoints = countryCode
-    .toUpperCase()
-    .split('')
-    .map(char =>  127397 + char.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
-};
-
 // --- Helper Types for Script Parsing ---
 interface ScriptSegment {
   id: string;
@@ -51,27 +40,21 @@ interface ScriptSegment {
 // --- Parsing Logic ---
 const parseScriptToSegments = (fullText: string): ScriptSegment[] => {
   const segments: ScriptSegment[] = [];
-  // Split by Slide Markers first, supporting optional markdown bolds
   const slideBlocks = fullText.split(/\[(?:\*\*)?SLIDE\s+(\d+)(?:\*\*)?\]/i);
-  
-  // The split results in: [textBefore, "1", textAfter, "2", textAfter...]
   
   let currentSlideIndex = 0;
   let runningTime = 0;
-  // Approximating chars per second. JP needs less chars per sec as they are denser.
   const CHARS_PER_SEC = 12; 
 
   for (let i = 0; i < slideBlocks.length; i++) {
     const block = slideBlocks[i];
     
-    // If it's a number (captured group), set current slide
     if (/^\d+$/.test(block)) {
       const pageNum = parseInt(block, 10);
-      currentSlideIndex = Math.max(0, pageNum - 1); // 0-based
+      currentSlideIndex = Math.max(0, pageNum - 1); 
       continue;
     }
 
-    // Otherwise, it's text content. Parse line by line.
     const lines = block.split('\n');
     for (const line of lines) {
       const trimmed = line.trim();
@@ -80,7 +63,6 @@ const parseScriptToSegments = (fullText: string): ScriptSegment[] => {
       let speaker: 'Host' | 'Expert' | null = null;
       let content = trimmed;
 
-      // Handle Host: / **Host**: formats
       if (/^(?:\*\*)?Host(?:\*\*)?:/i.test(trimmed)) {
         speaker = 'Host';
         content = trimmed.replace(/^(?:\*\*)?Host(?:\*\*)?:/i, '').trim();
@@ -190,16 +172,58 @@ const PresentationViewer: React.FC<{
   );
 };
 
+// --- Script Importer Component ---
+const ScriptImporter: React.FC<{ onImport: (data: any) => void }> = ({ onImport }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const json = JSON.parse(ev.target?.result as string);
+        onImport(json);
+      } catch (err) {
+        alert("Invalid file format");
+      }
+    };
+    reader.readAsText(file);
+    // Reset
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  return (
+    <>
+      <button 
+        onClick={() => fileInputRef.current?.click()} 
+        className="text-[10px] md:text-xs font-bold uppercase px-3 py-1.5 bg-white border-2 border-bauhaus-black hover:bg-gray-100 flex items-center gap-2"
+      >
+        <span>📥 Import</span>
+      </button>
+      <input 
+        type="file" 
+        accept="application/json" 
+        ref={fileInputRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+      />
+    </>
+  );
+};
+
 const App: React.FC = () => {
   // --- Core State ---
   const [currentStyle, setCurrentStyle] = useState<IntroStyle>(INTRO_STYLES[0]);
   const [text, setText] = useState<string>("");
+  const [hostName, setHostName] = useState("HOST");
+  const [expertName, setExpertName] = useState("EXPERT");
   
   // --- Audio/Playback State ---
   const [isPlaying, setIsPlaying] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const audioElemRef = useRef<HTMLAudioElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0); 
   const [duration, setDuration] = useState(0);
@@ -217,6 +241,7 @@ const App: React.FC = () => {
 
   // --- UI State ---
   const [activeTab, setActiveTab] = useState<'script' | 'slides'>('script');
+  const [isScriptEditing, setIsScriptEditing] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState<string>(INTRO_STYLES[0].defaultVoice);
@@ -224,7 +249,9 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [downloadData, setDownloadData] = useState<{ url: string, filename: string } | null>(null);
   const [customStylePrompt, setCustomStylePrompt] = useState<string>(CUSTOM_STYLE.description);
-  const [flagIndex, setFlagIndex] = useState(0);
+  
+  // Sidebar always collapsed (icon only) for simplicity
+  const isSidebarCollapsed = true;
 
   const generationIdRef = useRef(0);
 
@@ -238,7 +265,7 @@ const App: React.FC = () => {
     }
   }, [text]);
 
-  // Sync logic using requestAnimationFrame for smooth UI updates during playback
+  // Sync logic
   useEffect(() => {
     let animationFrameId: number;
     
@@ -285,13 +312,6 @@ const App: React.FC = () => {
       if (downloadData) URL.revokeObjectURL(downloadData.url);
     };
   }, [pdfUrl, downloadData]);
-
-  useEffect(() => {
-      const interval = setInterval(() => {
-        setFlagIndex((prev) => (prev + 1) % SUPPORTED_LANGUAGES.length);
-      }, 1000);
-      return () => clearInterval(interval);
-  }, []);
 
   // --- Handlers ---
 
@@ -346,6 +366,56 @@ const App: React.FC = () => {
         setError("スライドの解析に失敗しました。");
     } finally {
         setIsAnalyzing(false);
+    }
+  };
+
+  const handleExportScript = () => {
+    if (!text) return;
+    const data = {
+        version: 1,
+        text,
+        hostName,
+        expertName,
+        // Optional: Save PDF data if available so we can reconstruct the view
+        pdfBase64, 
+        timestamp: Date.now()
+    };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `podcast-script-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportScript = (data: any) => {
+    if (data.version === 1 && data.text) {
+        setText(data.text);
+        if (data.hostName) setHostName(data.hostName);
+        if (data.expertName) setExpertName(data.expertName);
+        
+        if (data.pdfBase64) {
+            setPdfBase64(data.pdfBase64);
+            // Reconstruct a Blob URL for the PDF viewer
+            const byteCharacters = atob(data.pdfBase64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], {type: 'application/pdf'});
+            const url = URL.createObjectURL(blob);
+            setPdfUrl(url);
+        }
+
+        setScriptGenerated(true);
+        setActiveTab('script');
+        setIsScriptEditing(false); // Default to read mode
+    } else {
+        setError("Invalid script file format.");
     }
   };
 
@@ -418,33 +488,69 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col md:flex-row bg-bauhaus-white font-sans text-bauhaus-black h-screen w-full overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-full md:w-1/4 md:min-w-[300px] h-[180px] md:h-full flex-shrink-0 border-b-4 md:border-b-0 md:border-r-4 border-bauhaus-black z-10 flex flex-col bg-bauhaus-white">
+      {/* Sidebar - Fixed Width for Icons */}
+      <div className={`
+        flex-shrink-0 border-b-4 md:border-b-0 md:border-r-4 border-bauhaus-black z-10 flex flex-col bg-bauhaus-white
+        w-full h-[80px] md:h-full md:w-[90px]
+      `}>
         <div className="flex-1 min-h-0 relative">
           <StyleSelector 
             selectedStyle={currentStyle} 
             onSelect={handleStyleChange}
             onCustomize={handleCustomize}
+            isCollapsed={true}
           />
         </div>
-        <Footer className="hidden md:block" />
       </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col h-full relative min-w-0 overflow-hidden">
         
         {/* Header */}
-        <div className="flex-shrink-0 border-b-4 border-bauhaus-black p-3 md:p-8 bg-white flex justify-between items-start z-10">
-          <div>
-            <h1 className="text-2xl md:text-4xl lg:text-5xl font-black uppercase tracking-tighter mb-1 md:mb-2">
-              Slide to Podcast
-            </h1>
-            <div className="flex items-center gap-3">
-              <span className={`px-2 py-0.5 md:px-3 md:py-1 text-[10px] md:text-sm font-bold uppercase text-white ${getColorClass(currentStyle.color, true)}`}>
-                {currentStyle.id === 'custom' ? 'カスタム設定' : 'ホストのペルソナ'}
-              </span>
-              <span className="font-bold uppercase tracking-widest text-xs md:text-base">{currentStyle.name}</span>
+        <div className="flex-shrink-0 border-b-4 border-bauhaus-black p-3 md:p-6 bg-white flex flex-col md:flex-row justify-between items-center z-10 gap-4">
+          <div className="flex items-center gap-4 w-full md:w-auto">
+            <div>
+                <h1 className="text-xl md:text-3xl font-black uppercase tracking-tighter leading-none">
+                Slide to Podcast
+                </h1>
+                <div className="flex items-center gap-2 mt-1">
+                    <span className={`px-2 py-0.5 text-[10px] font-bold uppercase text-white ${getColorClass(currentStyle.color, true)}`}>
+                        {currentStyle.id === 'custom' ? 'CUSTOM' : 'PERSONA'}
+                    </span>
+                    <span className="font-bold uppercase tracking-widest text-xs">{currentStyle.name}</span>
+                </div>
             </div>
+          </div>
+
+          {/* Stylish Custom Name Inputs */}
+          <div className="flex items-center gap-8 w-full md:w-auto mt-2 md:mt-0">
+             {/* Host Input */}
+             <div className="flex flex-col relative group">
+                <label className="text-[10px] font-black uppercase text-bauhaus-blue tracking-wider mb-1 flex items-center gap-1">
+                    <CircleIcon className="w-2 h-2" /> Host Name
+                </label>
+                <input 
+                    type="text" 
+                    value={hostName} 
+                    onChange={(e) => setHostName(e.target.value)}
+                    className="bg-transparent border-b-4 border-bauhaus-blue text-lg font-bold w-[120px] focus:outline-none focus:border-black transition-colors uppercase placeholder-gray-300"
+                    placeholder="NAME"
+                />
+             </div>
+
+             {/* Expert Input */}
+             <div className="flex flex-col relative group">
+                <label className="text-[10px] font-black uppercase text-bauhaus-black tracking-wider mb-1 flex items-center gap-1">
+                    <TriangleIcon className="w-2 h-2 text-bauhaus-yellow" /> Expert Name
+                </label>
+                <input 
+                    type="text" 
+                    value={expertName} 
+                    onChange={(e) => setExpertName(e.target.value)}
+                    className="bg-transparent border-b-4 border-bauhaus-yellow text-lg font-bold w-[120px] focus:outline-none focus:border-black transition-colors uppercase placeholder-gray-300"
+                    placeholder="NAME"
+                />
+             </div>
           </div>
         </div>
 
@@ -459,12 +565,18 @@ const App: React.FC = () => {
                     {!pdfFile ? (
                         <>
                             <h3 className="text-2xl font-bold uppercase mb-4">PDFをアップロード</h3>
-                            <label className="inline-block cursor-pointer">
-                                <input type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
-                                <span className="px-6 py-3 bg-bauhaus-black text-white font-bold uppercase hover:bg-bauhaus-blue transition-colors">
-                                    ファイルを選択
-                                </span>
-                            </label>
+                            <div className="flex flex-col gap-4 items-center">
+                                <label className="inline-block cursor-pointer">
+                                    <input type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
+                                    <span className="px-6 py-3 bg-bauhaus-black text-white font-bold uppercase hover:bg-bauhaus-blue transition-colors">
+                                        ファイルを選択
+                                    </span>
+                                </label>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold uppercase text-gray-400">- OR -</span>
+                                </div>
+                                <ScriptImporter onImport={handleImportScript} />
+                            </div>
                         </>
                     ) : (
                         <>
@@ -482,21 +594,67 @@ const App: React.FC = () => {
             {scriptGenerated && (
                 <div className="flex flex-col h-full">
                     {/* Tab Buttons */}
-                    <div className="flex border-b-4 border-bauhaus-black bg-gray-100 flex-shrink-0">
-                        <button onClick={() => setActiveTab('script')} className={`flex-1 py-2 font-bold uppercase ${activeTab === 'script' ? 'bg-white text-black' : 'text-gray-500'}`}>Script</button>
-                        <button onClick={() => setActiveTab('slides')} className={`flex-1 py-2 font-bold uppercase ${activeTab === 'slides' ? 'bg-white text-black' : 'text-gray-500'}`}>Presentation</button>
+                    <div className="flex border-b-4 border-bauhaus-black bg-gray-100 flex-shrink-0 items-center justify-between pr-2">
+                        <div className="flex">
+                            <button onClick={() => setActiveTab('script')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'script' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Script</button>
+                            <button onClick={() => setActiveTab('slides')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'slides' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Presentation</button>
+                        </div>
+                        
+                        {activeTab === 'script' && (
+                            <div className="flex items-center gap-2">
+                                <ScriptImporter onImport={handleImportScript} />
+                                <button 
+                                    onClick={handleExportScript} 
+                                    className="text-[10px] md:text-xs font-bold uppercase px-3 py-1.5 bg-white border-2 border-bauhaus-black hover:bg-gray-100 flex items-center gap-2"
+                                >
+                                    <span>💾 Export</span>
+                                </button>
+                                <div className="w-px h-4 bg-gray-300 mx-1"></div>
+                                <button 
+                                    onClick={() => setIsScriptEditing(!isScriptEditing)} 
+                                    className={`text-[10px] md:text-xs font-bold uppercase px-3 py-1.5 border-2 border-bauhaus-black flex items-center gap-2 ${isScriptEditing ? 'bg-bauhaus-black text-white' : 'bg-white hover:bg-gray-100'}`}
+                                >
+                                    {isScriptEditing ? 'Done' : '✎ Edit'}
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     {/* Content */}
                     <div className="flex-1 relative overflow-hidden">
                         
-                        {/* Script Editor */}
-                        <div className={`absolute inset-0 z-10 bg-white ${activeTab === 'script' ? 'block' : 'hidden'}`}>
-                            <textarea 
-                                className="w-full h-full p-6 text-lg font-bold bg-transparent outline-none resize-none custom-scrollbar"
-                                value={text}
-                                onChange={(e) => { setText(e.target.value); setDownloadData(null); }}
-                            />
+                        {/* Script Editor / Reader */}
+                        <div className={`absolute inset-0 z-10 bg-white ${activeTab === 'script' ? 'flex flex-col' : 'hidden'}`}>
+                            {isScriptEditing ? (
+                                <textarea 
+                                    className="w-full h-full p-6 text-lg font-mono bg-transparent outline-none resize-none custom-scrollbar"
+                                    value={text}
+                                    onChange={(e) => { setText(e.target.value); setDownloadData(null); }}
+                                />
+                            ) : (
+                                <div className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar bg-gray-50 flex flex-col gap-6">
+                                    {segments.map((seg, idx) => (
+                                        <div key={idx} className={`flex w-full ${seg.speaker === 'Host' ? 'justify-start' : 'justify-end'}`}>
+                                            <div className="flex flex-col max-w-[85%] md:max-w-[70%]">
+                                                <span className={`text-[10px] font-bold uppercase mb-1 ${seg.speaker === 'Host' ? 'text-bauhaus-blue text-left' : 'text-bauhaus-black text-right'}`}>
+                                                    {seg.speaker === 'Host' ? hostName : expertName}
+                                                </span>
+                                                <div className={`
+                                                    p-4 md:p-5 rounded-2xl text-sm md:text-base font-medium leading-relaxed shadow-sm
+                                                    ${seg.speaker === 'Host' 
+                                                        ? 'bg-white border-2 border-bauhaus-blue rounded-tl-none text-gray-800' 
+                                                        : 'bg-bauhaus-yellow/20 border-2 border-bauhaus-black rounded-tr-none text-gray-900'}
+                                                `}>
+                                                    {seg.text}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {segments.length === 0 && (
+                                        <div className="text-center text-gray-400 mt-10">No script parsed. Check the Edit mode.</div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* Presentation Mode */}
@@ -572,7 +730,7 @@ const App: React.FC = () => {
                     `}>
                       <div className="flex items-center gap-2 mb-1 text-[10px] font-bold uppercase opacity-80">
                           {segments[activeSegmentIndex].speaker === 'Host' ? <CircleIcon className="w-2 h-2" /> : <TriangleIcon className="w-2 h-2" />}
-                          {segments[activeSegmentIndex].speaker}
+                          {segments[activeSegmentIndex].speaker === 'Host' ? hostName : expertName}
                       </div>
                       <p className="text-sm md:text-lg font-bold leading-snug md:leading-relaxed line-clamp-3">
                         {segments[activeSegmentIndex].text}
