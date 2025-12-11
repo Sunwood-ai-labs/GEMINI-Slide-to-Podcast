@@ -47,6 +47,24 @@ export const InfoIcon = ({ className }: { className?: string }) => (
   </div>
 );
 
+export const IndeterminateProgressBar = ({ className }: { className?: string }) => (
+  <div className={`h-4 w-full border-2 border-bauhaus-black bg-white overflow-hidden relative ${className}`}>
+    <div className="absolute top-0 bottom-0 left-0 right-0 bg-[linear-gradient(45deg,transparent_25%,#1A1A1A_25%,#1A1A1A_50%,transparent_50%,transparent_75%,#1A1A1A_75%,#1A1A1A_100%)] bg-[length:20px_20px] animate-[progress-stripe_1s_linear_infinite] opacity-20"></div>
+    <div className="h-full bg-bauhaus-yellow w-full animate-[progress-indeterminate_2s_infinite_linear] origin-left scale-x-0"></div>
+    <style>{`
+      @keyframes progress-stripe {
+        0% { background-position: 0 0; }
+        100% { background-position: 20px 0; }
+      }
+      @keyframes progress-indeterminate {
+        0% { transform: translateX(-100%) scaleX(0.2); }
+        50% { transform: translateX(0%) scaleX(0.5); }
+        100% { transform: translateX(100%) scaleX(0.2); }
+      }
+    `}</style>
+  </div>
+);
+
 // Map icon string to component
 export const getIcon = (type: string, className: string = "w-8 h-8") => {
   switch (type) {

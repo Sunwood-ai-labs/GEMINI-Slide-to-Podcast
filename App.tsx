@@ -7,10 +7,20 @@ import { INTRO_STYLES, CUSTOM_STYLE, SUPPORTED_LANGUAGES } from './constants';
 import { IntroStyle } from './types';
 import { ALL_VOICES } from './voices';
 import { StyleSelector } from './components/StyleSelector';
-import { BauhausButton, getColorClass, DownloadIcon } from './components/BauhausComponents';
+import { BauhausButton, getColorClass, DownloadIcon, SquareIcon, RectIcon, IndeterminateProgressBar } from './components/BauhausComponents';
 import { ConfigurationModal } from './components/ConfigurationModal';
 import { SystemPromptModal } from './components/SystemPromptModal';
 import { generateSpeech, createWavBlob, dramatizeText, generateScriptFromPDF } from './services/geminiService';
+// @ts-ignore
+import * as pdfjsDist from 'pdfjs-dist';
+
+// Handle potential default export structure for PDF.js to fix "Cannot set properties of undefined"
+const pdfjsLib = (pdfjsDist as any).default || pdfjsDist;
+
+// Initialize PDF.js worker
+if (pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js`;
+}
 
 const Footer: React.FC<{ className?: string }> = ({ className }) => (
   <div className={`p-4 border-t-4 border-bauhaus-black bg-white text-[8px] text-gray-500 font-bold uppercase tracking-wider ${className}`}>
@@ -30,6 +40,95 @@ const getFlagEmoji = (countryCode: string) => {
   return String.fromCodePoint(...codePoints);
 };
 
+// PDF to Image Viewer Component
+const PdfSlidesViewer: React.FC<{ url: string | null }> = ({ url }) => {
+  const [images, setImages] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!url) {
+      setImages([]);
+      return;
+    }
+
+    const loadPdf = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        setImages([]);
+
+        const loadingTask = pdfjsLib.getDocument(url);
+        const pdf = await loadingTask.promise;
+        const numPages = pdf.numPages;
+        
+        // Render pages one by one
+        for (let i = 1; i <= numPages; i++) {
+          try {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 1.5 }); // Good quality for screen
+            
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            
+            if (context) {
+              canvas.height = viewport.height;
+              canvas.width = viewport.width;
+              
+              await page.render({ canvasContext: context, viewport }).promise;
+              
+              const imgData = canvas.toDataURL('image/jpeg', 0.8);
+              setImages(prev => [...prev, imgData]);
+            }
+          } catch (pageError) {
+            console.error(`Error rendering page ${i}`, pageError);
+          }
+        }
+      } catch (err) {
+        console.error("Error loading PDF", err);
+        setError("PDFの読み込みに失敗しました。");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadPdf();
+  }, [url]);
+
+  if (error) {
+    return <div className="flex items-center justify-center h-full text-bauhaus-red font-bold">{error}</div>;
+  }
+
+  if (loading && images.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4">
+        <div className="w-12 h-12 border-4 border-bauhaus-black border-t-bauhaus-yellow rounded-full animate-spin"></div>
+        <p className="font-bold text-gray-500 uppercase">Converting Slides...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-full overflow-y-auto custom-scrollbar bg-gray-200 p-4 md:p-8 flex flex-col gap-6 items-center">
+      {images.map((img, idx) => (
+        <div key={idx} className="w-full max-w-4xl bg-white shadow-hard border-2 border-bauhaus-black flex flex-col">
+          <img src={img} alt={`Slide ${idx + 1}`} className="w-full h-auto block" />
+          <div className="bg-bauhaus-black text-white text-[10px] px-2 py-1 text-right font-mono">
+            SLIDE {idx + 1}
+          </div>
+        </div>
+      ))}
+      {loading && (
+        <div className="w-full max-w-4xl p-8 flex justify-center bg-gray-100 border-2 border-dashed border-gray-300">
+           <span className="animate-pulse font-bold text-gray-400">Loading more slides...</span>
+        </div>
+      )}
+      {/* Spacer for bottom captions */}
+      <div className="h-[200px] flex-shrink-0"></div>
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   const [currentStyle, setCurrentStyle] = useState<IntroStyle>(INTRO_STYLES[0]);
   const [text, setText] = useState<string>("");
@@ -43,8 +142,13 @@ const App: React.FC = () => {
   // States for PDF/Script flow
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfBase64, setPdfBase64] = useState<string | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null); // For previewing
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [scriptGenerated, setScriptGenerated] = useState(false);
+  
+  // Tab State: 'script' | 'slides'
+  const [activeTab, setActiveTab] = useState<'script' | 'slides'>('script');
+  const [showCaptions, setShowCaptions] = useState(true);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -52,10 +156,6 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [downloadData, setDownloadData] = useState<{ url: string, filename: string } | null>(null);
   const [flagIndex, setFlagIndex] = useState(0);
-
-  // Auto-scroll state for languages
-  const [isHoveringLang, setIsHoveringLang] = useState(false);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Custom State initialized from constants.ts to match description
   const [customStylePrompt, setCustomStylePrompt] = useState<string>(CUSTOM_STYLE.description);
@@ -80,6 +180,15 @@ const App: React.FC = () => {
   useEffect(() => {
     setDownloadData(null);
   }, [selectedVoice, secondVoice]);
+
+  // Clean up Blob URL
+  useEffect(() => {
+      return () => {
+          if (pdfUrl) {
+              URL.revokeObjectURL(pdfUrl);
+          }
+      };
+  }, [pdfUrl]);
 
   // Update text and default voice when style changes
   const handleStyleChange = (style: IntroStyle) => {
@@ -127,9 +236,14 @@ const App: React.FC = () => {
     const file = event.target.files?.[0];
     if (file && file.type === 'application/pdf') {
         setPdfFile(file);
+        
+        // Create Blob URL for preview (more reliable than data URI for iframes/objects)
+        const url = URL.createObjectURL(file);
+        setPdfUrl(url);
+
         setError(null);
         
-        // Convert to Base64
+        // Convert to Base64 for API
         const reader = new FileReader();
         reader.onload = () => {
             const result = reader.result as string;
@@ -158,6 +272,14 @@ const App: React.FC = () => {
         const generatedScript = await generateScriptFromPDF(pdfBase64, stylePrompt);
         setText(generatedScript);
         setScriptGenerated(true);
+        
+        // Auto switch tab if style is Visual Commentary
+        if (currentStyle.id === 'visual_commentary') {
+            setActiveTab('slides');
+        } else {
+            setActiveTab('script');
+        }
+
     } catch (err) {
         console.error(err);
         setError("スライドの解析に失敗しました。もう一度お試しください。");
@@ -169,9 +291,11 @@ const App: React.FC = () => {
   const handleResetPDF = () => {
       setPdfFile(null);
       setPdfBase64(null);
+      setPdfUrl(null);
       setScriptGenerated(false);
       setText("");
       setDownloadData(null);
+      setActiveTab('script');
   };
 
   // 3. Rewrite Script (Dramatize)
@@ -203,6 +327,12 @@ const App: React.FC = () => {
         generationIdRef.current += 1; 
         return;
     }
+    
+    // Auto-switch to slides if using slide walkthrough style
+    if (currentStyle.id === 'visual_commentary' && scriptGenerated) {
+        setActiveTab('slides');
+    }
+
     if (downloadData && text.trim()) {
       try {
         const audio = new Audio(downloadData.url);
@@ -423,39 +553,93 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* State B: Text Editor (Always rendered but covered by State A if !scriptGenerated) */}
-                <textarea 
-                    className="w-full h-full resize-none p-4 md:p-6 text-lg md:text-2xl font-bold bg-transparent outline-none leading-normal focus:bg-gray-50 custom-scrollbar"
-                    value={text}
-                    onChange={(e) => {
-                        setText(e.target.value);
-                        setDownloadData(null);
-                    }}
-                    placeholder=""
-                    readOnly={!scriptGenerated}
-                />
-                
+                {/* State B: Content Area (Tabs + View) */}
                 {scriptGenerated && (
-                    <div className="absolute top-4 right-4 flex gap-2">
-                         <button 
-                            onClick={handleDramatize}
-                            disabled={isDramatizing}
-                            className="bg-white border-2 border-bauhaus-black px-3 py-1 text-xs font-bold uppercase hover:bg-bauhaus-yellow shadow-[2px_2px_0px_0px_#1A1A1A] active:translate-y-[1px] active:shadow-none transition-all disabled:opacity-50"
-                        >
-                            {isDramatizing ? "リライト中..." : "✨ リライト"}
-                        </button>
-                         <button 
-                            onClick={handleResetPDF}
-                            className="bg-bauhaus-white border-2 border-bauhaus-black px-3 py-1 text-xs font-bold uppercase hover:bg-gray-200"
-                        >
-                            別のPDF
-                        </button>
+                    <div className="flex flex-col h-full">
+                        {/* Tabs */}
+                        <div className="flex border-b-4 border-bauhaus-black bg-gray-100 flex-shrink-0">
+                            <button 
+                                onClick={() => setActiveTab('script')}
+                                className={`flex-1 py-3 px-4 font-bold uppercase text-sm md:text-base flex items-center justify-center gap-2 transition-colors ${activeTab === 'script' ? 'bg-white text-bauhaus-black' : 'bg-gray-200 text-gray-500 hover:bg-gray-100'}`}
+                            >
+                                <RectIcon className="w-4" /> Script (台本)
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('slides')}
+                                className={`flex-1 py-3 px-4 font-bold uppercase text-sm md:text-base flex items-center justify-center gap-2 transition-colors ${activeTab === 'slides' ? 'bg-white text-bauhaus-black' : 'bg-gray-200 text-gray-500 hover:bg-gray-100'}`}
+                            >
+                                <SquareIcon className="w-3 h-3" /> Slides (スライド)
+                            </button>
+                        </div>
+                        
+                        {/* Tab Content */}
+                        <div className="flex-1 relative overflow-hidden bg-white">
+                            {/* Script View */}
+                            <div className={`absolute inset-0 flex flex-col ${activeTab === 'script' ? 'z-10 visible' : 'z-0 invisible'}`}>
+                                <textarea 
+                                    className="w-full h-full resize-none p-4 md:p-6 text-lg md:text-2xl font-bold bg-transparent outline-none leading-normal focus:bg-gray-50 custom-scrollbar"
+                                    value={text}
+                                    onChange={(e) => {
+                                        setText(e.target.value);
+                                        setDownloadData(null);
+                                    }}
+                                    placeholder=""
+                                />
+                                <div className="absolute top-4 right-4 flex gap-2">
+                                     <button 
+                                        onClick={handleDramatize}
+                                        disabled={isDramatizing}
+                                        className="bg-white border-2 border-bauhaus-black px-3 py-1 text-xs font-bold uppercase hover:bg-bauhaus-yellow shadow-[2px_2px_0px_0px_#1A1A1A] active:translate-y-[1px] active:shadow-none transition-all disabled:opacity-50"
+                                    >
+                                        {isDramatizing ? "リライト中..." : "✨ リライト"}
+                                    </button>
+                                     <button 
+                                        onClick={handleResetPDF}
+                                        className="bg-bauhaus-white border-2 border-bauhaus-black px-3 py-1 text-xs font-bold uppercase hover:bg-gray-200"
+                                    >
+                                        別のPDF
+                                    </button>
+                                </div>
+                                <div className="absolute bottom-4 right-4 text-[10px] md:text-xs font-bold bg-bauhaus-black text-white px-2 py-1 pointer-events-none">
+                                    {text.length} 文字
+                                </div>
+                            </div>
+
+                            {/* Slide View (Converted to Images) */}
+                            <div className={`absolute inset-0 flex flex-col bg-gray-100 ${activeTab === 'slides' ? 'z-10 visible' : 'z-0 invisible'}`}>
+                                <div className="relative w-full h-full">
+                                    <PdfSlidesViewer url={pdfUrl} />
+
+                                    {/* Subtitles Overlay (Fixed at bottom) */}
+                                    {showCaptions && (
+                                        <div className="absolute bottom-0 left-0 right-0 h-1/3 min-h-[150px] bg-black/80 backdrop-blur-sm border-t-4 border-bauhaus-yellow p-4 md:p-6 text-white overflow-y-auto z-20 custom-scrollbar">
+                                            <p className="whitespace-pre-wrap font-medium text-lg leading-relaxed">{text}</p>
+                                        </div>
+                                    )}
+
+                                    {/* Overlay Controls */}
+                                    <div className="absolute top-4 right-4 z-30 flex gap-2">
+                                        <button 
+                                            onClick={() => setShowCaptions(!showCaptions)}
+                                            className={`
+                                                border-2 px-3 py-1 text-xs font-bold uppercase shadow-hard-sm transition-colors
+                                                ${showCaptions ? 'bg-bauhaus-yellow text-black border-black' : 'bg-black text-white border-white'}
+                                            `}
+                                        >
+                                            {showCaptions ? '字幕 ON' : '字幕 OFF'}
+                                        </button>
+                                        <button 
+                                            onClick={handleResetPDF}
+                                            className="bg-bauhaus-white border-2 border-bauhaus-black px-3 py-1 text-xs font-bold uppercase hover:bg-gray-200 shadow-hard-sm"
+                                        >
+                                            別のPDF
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 )}
-                
-                <div className="absolute bottom-4 right-4 text-[10px] md:text-xs font-bold bg-bauhaus-black text-white px-2 py-1 pointer-events-none z-10">
-                    {text.length} 文字
-                </div>
             </div>
             
             {error && (
@@ -467,68 +651,74 @@ const App: React.FC = () => {
         </div>
 
         {/* Action Bar */}
-        <div className="flex-shrink-0 border-t-4 border-bauhaus-black bg-white p-3 md:p-8 z-20">
-          <div className="flex items-center justify-between relative">
-            
-            <div className="flex-1 flex justify-start min-w-0 pr-2">
-              <BauhausButton 
-                onClick={handleDownload}
-                disabled={!downloadData}
-                variant="primary"
-                icon={<DownloadIcon className="w-5 h-5 md:w-6 md:h-6" />}
-                className="text-sm md:text-lg p-3 md:p-4 whitespace-nowrap focus:outline-none focus:ring-4 focus:ring-bauhaus-black"
-              >
-                <span className="hidden lg:inline">音声保存</span>
-              </BauhausButton>
-            </div>
+        <div className="flex-shrink-0 border-t-4 border-bauhaus-black bg-white relative z-20">
+          
+          {/* Progress Bar (Visible when Generating) */}
+          {isGenerating && <IndeterminateProgressBar className="absolute top-0 left-0 right-0 z-30 border-t-0 border-l-0 border-r-0 border-b-2" />}
 
-            <div className="flex flex-col items-center justify-center flex-shrink-0 z-10 group">
-              <button 
-                onClick={handlePlay}
-                disabled={isAnalyzing || (!text.trim() && !pdfFile)}
-                className={`
-                  w-14 h-14 md:w-24 md:h-24 rounded-full border-4 border-bauhaus-black flex items-center justify-center transition-all shadow-hard
-                  focus:outline-none focus:ring-4 focus:ring-bauhaus-yellow
-                  ${(isPlaying || isGenerating) ? 'bg-bauhaus-black hover:bg-gray-800' : 'bg-bauhaus-red hover:bg-red-600 hover:-translate-y-1'}
-                  ${isGenerating ? 'hover:translate-y-2 hover:shadow-none' : ''}
-                  ${(!text.trim() && !pdfFile) ? 'opacity-50 cursor-not-allowed transform-none' : ''}
-                `}
-              >
-                {isGenerating ? (
-                   <div className="flex gap-1">
-                    <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-white animate-pulse"></div>
-                    <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-white animate-pulse delay-75"></div>
-                    <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-white animate-pulse delay-150"></div>
-                  </div>
-                ) : isPlaying ? (
-                  <div className="w-5 h-5 md:w-8 md:h-8 bg-white"></div>
-                ) : (
-                  <div className="w-0 h-0 border-t-[8px] md:border-t-[15px] border-t-transparent border-l-[14px] md:border-l-[25px] border-l-white border-b-[8px] md:border-b-[15px] border-b-transparent ml-1 md:ml-2"></div>
-                )}
-              </button>
-              <span className="font-bold mt-4 uppercase tracking-widest text-[10px] md:text-base whitespace-nowrap">
-                {isGenerating ? '音声生成中' : isPlaying ? '停止' : '再生'}
-              </span>
-            </div>
+          <div className="p-3 md:p-8">
+            <div className="flex items-center justify-between relative">
+              
+              <div className="flex-1 flex justify-start min-w-0 pr-2">
+                <BauhausButton 
+                  onClick={handleDownload}
+                  disabled={!downloadData}
+                  variant="primary"
+                  icon={<DownloadIcon className="w-5 h-5 md:w-6 md:h-6" />}
+                  className="text-sm md:text-lg p-3 md:p-4 whitespace-nowrap focus:outline-none focus:ring-4 focus:ring-bauhaus-black"
+                >
+                  <span className="hidden lg:inline">音声保存</span>
+                </BauhausButton>
+              </div>
 
-            <div className="flex-1 flex flex-col items-end justify-center min-w-0 pl-2">
-               <div className="text-[10px] md:text-xs font-bold uppercase text-gray-500 mb-1 whitespace-nowrap">使用ボイス</div>
-               <button 
-                 type="button"
-                 className={`
-                   text-xs md:text-lg font-bold border-2 px-2 md:px-3 py-1 text-right transition-colors max-w-full truncate
-                   focus:outline-none focus:ring-4 focus:ring-bauhaus-yellow
-                   ${currentStyle.id === 'custom' 
-                     ? 'bg-bauhaus-yellow border-bauhaus-black text-bauhaus-black' 
-                     : 'bg-bauhaus-black border-bauhaus-black text-white cursor-pointer hover:bg-gray-800'
-                   }
-                 `}
-                 onClick={() => setIsConfigOpen(true)}
-               >
-                 {activeVoiceLabel} {secondVoice ? `& ${secondVoice}` : ''}
-               </button>
-            </div>
+              <div className="flex flex-col items-center justify-center flex-shrink-0 z-10 group">
+                <button 
+                  onClick={handlePlay}
+                  disabled={isAnalyzing || (!text.trim() && !pdfFile)}
+                  className={`
+                    w-14 h-14 md:w-24 md:h-24 rounded-full border-4 border-bauhaus-black flex items-center justify-center transition-all shadow-hard
+                    focus:outline-none focus:ring-4 focus:ring-bauhaus-yellow
+                    ${(isPlaying || isGenerating) ? 'bg-bauhaus-black hover:bg-gray-800' : 'bg-bauhaus-red hover:bg-red-600 hover:-translate-y-1'}
+                    ${isGenerating ? 'hover:translate-y-2 hover:shadow-none cursor-wait' : ''}
+                    ${(!text.trim() && !pdfFile) ? 'opacity-50 cursor-not-allowed transform-none' : ''}
+                  `}
+                >
+                  {isGenerating ? (
+                     <div className="flex gap-1">
+                      <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-white animate-pulse"></div>
+                      <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-white animate-pulse delay-75"></div>
+                      <div className="w-1.5 h-1.5 md:w-2 md:h-2 bg-white animate-pulse delay-150"></div>
+                    </div>
+                  ) : isPlaying ? (
+                    <div className="w-5 h-5 md:w-8 md:h-8 bg-white"></div>
+                  ) : (
+                    <div className="w-0 h-0 border-t-[8px] md:border-t-[15px] border-t-transparent border-l-[14px] md:border-l-[25px] border-l-white border-b-[8px] md:border-b-[15px] border-b-transparent ml-1 md:ml-2"></div>
+                  )}
+                </button>
+                <span className="font-bold mt-4 uppercase tracking-widest text-[10px] md:text-base whitespace-nowrap">
+                  {isGenerating ? '音声生成中' : isPlaying ? '停止' : '再生'}
+                </span>
+              </div>
 
+              <div className="flex-1 flex flex-col items-end justify-center min-w-0 pl-2">
+                 <div className="text-[10px] md:text-xs font-bold uppercase text-gray-500 mb-1 whitespace-nowrap">使用ボイス</div>
+                 <button 
+                   type="button"
+                   className={`
+                     text-xs md:text-lg font-bold border-2 px-2 md:px-3 py-1 text-right transition-colors max-w-full truncate
+                     focus:outline-none focus:ring-4 focus:ring-bauhaus-yellow
+                     ${currentStyle.id === 'custom' 
+                       ? 'bg-bauhaus-yellow border-bauhaus-black text-bauhaus-black' 
+                       : 'bg-bauhaus-black border-bauhaus-black text-white cursor-pointer hover:bg-gray-800'
+                     }
+                   `}
+                   onClick={() => setIsConfigOpen(true)}
+                 >
+                   {activeVoiceLabel} {secondVoice ? `& ${secondVoice}` : ''}
+                 </button>
+              </div>
+
+            </div>
           </div>
         </div>
         <Footer className="md:hidden flex-shrink-0" />
