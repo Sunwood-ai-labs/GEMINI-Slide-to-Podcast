@@ -41,9 +41,14 @@ const parseScriptToSegments = (fullText: string, hostName: string, expertName: s
   let runningTime = 0;
   const CHARS_PER_SEC = 15; 
 
-  // Include colon variants
-  const hostRegex = new RegExp(`^(?:\\*\\*)?(?:Host|${escapeRegExp(hostName)})(?:\\*\\*)?[:：]`, 'i');
-  const expertRegex = new RegExp(`^(?:\\*\\*)?(?:Expert|${escapeRegExp(expertName)})(?:\\*\\*)?[:：]`, 'i');
+  // Regex strategies
+  // 1. Check for "Name:" pattern at start of line
+  const hostLabelRegex = new RegExp(`^(?:\\*\\*)?(?:Host|${escapeRegExp(hostName)})(?:\\*\\*)?[:：]`, 'i');
+  const expertLabelRegex = new RegExp(`^(?:\\*\\*)?(?:Expert|${escapeRegExp(expertName)})(?:\\*\\*)?[:：]`, 'i');
+
+  // 2. Check for "Name" only line (exact match) - common in some Gemini outputs or copy-pastes
+  const hostLineRegex = new RegExp(`^(?:\\*\\*)?(?:Host|${escapeRegExp(hostName)})(?:\\*\\*)?$`, 'i');
+  const expertLineRegex = new RegExp(`^(?:\\*\\*)?(?:Expert|${escapeRegExp(expertName)})(?:\\*\\*)?$`, 'i');
 
   let currentSpeaker: 'Host' | 'Expert' | null = null;
 
@@ -62,28 +67,40 @@ const parseScriptToSegments = (fullText: string, hostName: string, expertName: s
       if (!trimmed) continue;
 
       let content = trimmed;
+      let speakerChanged = false;
 
-      if (hostRegex.test(trimmed)) {
+      // Check for label prefix first "Name: Text"
+      if (hostLabelRegex.test(trimmed)) {
         currentSpeaker = 'Host';
-        content = trimmed.replace(hostRegex, '').trim();
-      } else if (expertRegex.test(trimmed)) {
+        content = trimmed.replace(hostLabelRegex, '').trim();
+        speakerChanged = true;
+      } else if (expertLabelRegex.test(trimmed)) {
         currentSpeaker = 'Expert';
-        content = trimmed.replace(expertRegex, '').trim();
+        content = trimmed.replace(expertLabelRegex, '').trim();
+        speakerChanged = true;
+      } 
+      // Check for standalone name line "Name"
+      else if (hostLineRegex.test(trimmed)) {
+        currentSpeaker = 'Host';
+        continue; // Skip this line, it's just a label
+      } else if (expertLineRegex.test(trimmed)) {
+        currentSpeaker = 'Expert';
+        continue; // Skip this line
       }
-      
+
       // If we have an identified speaker, process the text
-      // (Even if no new label is present, we assume continued speech from currentSpeaker)
       if (currentSpeaker && content) {
-        // Split by punctuation: 。！？ . ! ?
-        // Using lookbehind to keep punctuation with the sentence if supported, 
-        // fallback to split-join strategy if regex lookbehind issues (but modern browsers support it).
-        // Strategy: Split *after* punctuation.
-        const rawSentences = content.split(/(?<=[。！？\.\!\?])\s+/);
+        // Robust Sentence Splitting
+        // Replace punctuation with "Punctuation + SplitMarker"
+        // 1. Japanese: 。！？ => add \n
+        let formatted = content.replace(/([。！？]+)/g, "$1\n");
+        // 2. English: .!? followed by space => add \n (avoids 3.14)
+        formatted = formatted.replace(/([.!?]+)(\s+)/g, "$1\n$2");
+        
+        // Split and filter
+        const rawSentences = formatted.split('\n').map(s => s.trim()).filter(s => s.length > 0);
 
-        for (const sentence of rawSentences) {
-            const cleanSentence = sentence.trim();
-            if (!cleanSentence) continue;
-
+        for (const cleanSentence of rawSentences) {
             const duration = Math.max(1.5, cleanSentence.length / CHARS_PER_SEC);
             segments.push({
               id: Math.random().toString(36).substr(2, 9),
@@ -781,7 +798,7 @@ const App: React.FC = () => {
                           {segments[activeSegmentIndex].speaker === 'Host' ? <CircleIcon className="w-2 h-2" /> : <TriangleIcon className="w-2 h-2" />}
                           {segments[activeSegmentIndex].speaker === 'Host' ? hostName : expertName}
                       </div>
-                      <p className="text-sm md:text-lg font-bold leading-snug md:leading-relaxed line-clamp-3">
+                      <p className="text-sm md:text-lg font-bold leading-snug md:leading-relaxed">
                         {segments[activeSegmentIndex].text}
                       </p>
                     </div>
