@@ -328,10 +328,12 @@ export const generateScriptFromPDF = async (
   pdfBase64: string, 
   personalityDescription: string,
   hostName: string,
-  expertName: string
+  expertName: string,
+  language: 'ja' | 'en' = 'ja'
 ): Promise<string> => {
   const ai = getClient();
-  const prompt = `
+  
+  const jpPrompt = `
     あなたは2人のポッドキャストパーソナリティ（HostとExpert）のプロデューサーです。
     添付されたPDF（スライド資料）を元に、この2人が内容について語り合うポッドキャストの台本を作成してください。
     
@@ -371,6 +373,48 @@ export const generateScriptFromPDF = async (
        - Expert (${expertName}): データの裏にある「企業の意図」「市場への影響」を推測して解説してください。
   `;
 
+  const enPrompt = `
+    You are the producer of a podcast featuring two personalities (Host and Expert).
+    Based on the attached PDF (slides), create a podcast script where these two discuss the content.
+
+    【Settings】
+    ${personalityDescription}
+
+    【Important: Character Names】
+    - Host Name: "${hostName}"
+    - Expert Name: "${expertName}"
+    - Always address each other by name in the script (e.g., "${hostName}", "${expertName}").
+
+    【Script Format】
+    Start each line with the speaker's name as a label.
+    Example:
+    ${hostName}: Hello, ${expertName}.
+    ${expertName}: Hi, ${hostName}. Today we are discussing...
+
+    【Structure and Markers (CRITICAL)】
+    **Insert the marker \`[SLIDE X]\` (where X is page number 1, 2...) whenever the topic shifts to a new slide.**
+    Example:
+    [SLIDE 1]
+    ${hostName}: Hello, here is our theme today.
+    ${expertName}: Looks interesting.
+    [SLIDE 2]
+    ${hostName}: So, let's look at the current challenges.
+
+    【STRICT PROHIBITIONS】
+    1. **No Visual Descriptions**:
+       - NEVER mention the visual look of the slides (e.g., "Beautiful cover", "Blue background", "Big text").
+       - Only discuss the **content** and **meaning** of what is written.
+    2. **No Meta-Comments**:
+       - Avoid procedural instructions like "On the right side of the slide" or "Let's go to the next page." Transition topics naturally in conversation.
+
+    【Instruction: Deep Dive】
+    1. **Ask for Meaning**:
+       - Host (${hostName}): Don't just read. Ask "What does this actually mean?" or "Why is this important?"
+       - Expert (${expertName}): Infer and explain the "corporate intent" or "market impact" behind the data.
+  `;
+
+  const prompt = language === 'en' ? enPrompt : jpPrompt;
+
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -382,16 +426,17 @@ export const generateScriptFromPDF = async (
       },
     });
 
-    return response.text || "台本の生成に失敗しました。";
+    return response.text || (language === 'en' ? "Failed to generate script." : "台本の生成に失敗しました。");
   } catch (error) {
     console.error("Error analyzing PDF:", error);
     throw error;
   }
 };
 
-export const dramatizeText = async (text: string, styleInstruction?: string): Promise<string> => {
+export const dramatizeText = async (text: string, styleInstruction?: string, language: 'ja' | 'en' = 'ja'): Promise<string> => {
   const ai = getClient();
-  const prompt = `
+  
+  const jpPrompt = `
     以下のポッドキャスト台本を、指定されたスタイルに合わせてリライト（推敲）してください。
     ただし、以下のルールを厳守してください。
     1. **マーカーの維持**: \`[SLIDE 1]\`, \`[SLIDE 2]\` などのスライドマーカーは、**位置を変えずにそのまま残してください**。これはシステムがスライドを切り替えるために必須です。
@@ -402,6 +447,20 @@ export const dramatizeText = async (text: string, styleInstruction?: string): Pr
     入力テキスト:
     "${text}"
   `;
+
+  const enPrompt = `
+    Rewrite (polish) the following podcast script to match the specified style.
+    STRICTLY follow these rules:
+    1. **Maintain Markers**: \`[SLIDE 1]\`, \`[SLIDE 2]\` etc. must remain **in their exact original positions**. This is required for the system to switch slides.
+    2. **Maintain Labels**: Do not change the current speaker labels (e.g., Host: or Name:).
+    3. **Remove Visual Descriptions**: Remove any mention of "design", "color", or "layout" and replace with discussion of the core essence.
+
+    Style Instruction: ${styleInstruction}
+    Input Text:
+    "${text}"
+  `;
+
+  const prompt = language === 'en' ? enPrompt : jpPrompt;
 
   try {
     const response = await ai.models.generateContent({

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { INTRO_STYLES, CUSTOM_STYLE, SUPPORTED_LANGUAGES } from './constants';
+import { INTRO_STYLES, CUSTOM_STYLE, TRANSLATIONS } from './constants';
 import { IntroStyle, ScriptSegment } from './types';
 import { ALL_VOICES } from './voices';
 import { StyleSelector } from './components/StyleSelector';
@@ -203,7 +203,7 @@ const PresentationViewer: React.FC<{
 };
 
 // --- Script Importer Component ---
-const ScriptImporter: React.FC<{ onImport: (data: any) => void }> = ({ onImport }) => {
+const ScriptImporter: React.FC<{ onImport: (data: any) => void; label: string }> = ({ onImport, label }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -230,7 +230,7 @@ const ScriptImporter: React.FC<{ onImport: (data: any) => void }> = ({ onImport 
         onClick={() => fileInputRef.current?.click()} 
         className="text-[10px] md:text-xs font-bold uppercase px-3 py-1.5 bg-white border-2 border-bauhaus-black hover:bg-gray-100 flex items-center gap-2"
       >
-        <span>📥 Import</span>
+        <span>📥 {label}</span>
       </button>
       <input 
         type="file" 
@@ -245,6 +245,7 @@ const ScriptImporter: React.FC<{ onImport: (data: any) => void }> = ({ onImport 
 
 const App: React.FC = () => {
   // --- Core State ---
+  const [language, setLanguage] = useState<'ja' | 'en'>('ja');
   const [currentStyle, setCurrentStyle] = useState<IntroStyle>(INTRO_STYLES[0]);
   const [text, setText] = useState<string>("");
   const [hostName, setHostName] = useState("こはく");
@@ -284,8 +285,26 @@ const App: React.FC = () => {
   const isSidebarCollapsed = true;
 
   const generationIdRef = useRef(0);
+  
+  const t = TRANSLATIONS[language];
 
   // --- Effects ---
+
+  // Handle language switch default names
+  useEffect(() => {
+    // If names match the defaults of the previous language (or just default to new language defaults if not touched)
+    // For simplicity, if the current names match the OTHER language's defaults, switch them.
+    if (language === 'en') {
+      if (hostName === TRANSLATIONS.ja.defaultHostName) setHostName(TRANSLATIONS.en.defaultHostName);
+      if (expertName === TRANSLATIONS.ja.defaultExpertName) setExpertName(TRANSLATIONS.en.defaultExpertName);
+      // Update custom prompt description if it's the default
+      if (customStylePrompt === CUSTOM_STYLE.description) setCustomStylePrompt(CUSTOM_STYLE.descriptionEn);
+    } else {
+      if (hostName === TRANSLATIONS.en.defaultHostName) setHostName(TRANSLATIONS.ja.defaultHostName);
+      if (expertName === TRANSLATIONS.en.defaultExpertName) setExpertName(TRANSLATIONS.ja.defaultExpertName);
+      if (customStylePrompt === CUSTOM_STYLE.descriptionEn) setCustomStylePrompt(CUSTOM_STYLE.description);
+    }
+  }, [language]);
 
   // Re-parse script when text or names change
   useEffect(() => {
@@ -377,7 +396,7 @@ const App: React.FC = () => {
         };
         reader.readAsDataURL(file);
     } else {
-        setError("PDFファイルのみ対応しています。");
+        setError(t.errorPdf);
     }
   };
 
@@ -386,14 +405,17 @@ const App: React.FC = () => {
     setIsAnalyzing(true);
     setError(null);
     try {
-        const prompt = currentStyle.id === 'custom' ? customStylePrompt : currentStyle.description;
-        const generatedScript = await generateScriptFromPDF(pdfBase64, prompt, hostName, expertName);
+        const prompt = currentStyle.id === 'custom' 
+            ? customStylePrompt 
+            : (language === 'en' ? currentStyle.descriptionEn : currentStyle.description);
+            
+        const generatedScript = await generateScriptFromPDF(pdfBase64, prompt, hostName, expertName, language);
         setText(generatedScript);
         setScriptGenerated(true);
         setActiveTab('script'); 
     } catch (err) {
         console.error(err);
-        setError("スライドの解析に失敗しました。");
+        setError(t.errorAnalyze);
     } finally {
         setIsAnalyzing(false);
     }
@@ -445,7 +467,7 @@ const App: React.FC = () => {
         setActiveTab('script');
         setIsScriptEditing(false); // Default to read mode
     } else {
-        setError("Invalid script file format.");
+        setError(t.errorImport);
     }
   };
 
@@ -520,9 +542,9 @@ const App: React.FC = () => {
         errorStr.includes("429") ||
         errorStr.includes("RESOURCE_EXHAUSTED")
       ) {
-        setError("API利用枠の上限に達しました(429)。設定(⚙)からAPIキーを有料プランのものに変更してください。");
+        setError(t.errorQuota);
       } else {
-        setError("音声生成に失敗しました: " + errorMessage);
+        setError(t.errorGen + errorMessage);
       }
       setIsGenerating(false);
     }
@@ -551,6 +573,7 @@ const App: React.FC = () => {
             onSelect={handleStyleChange}
             onCustomize={handleCustomize}
             isCollapsed={true}
+            language={language}
           />
         </div>
       </div>
@@ -563,15 +586,24 @@ const App: React.FC = () => {
           <div className="flex items-center gap-4 w-full md:w-auto">
             <div>
                 <h1 className="text-xl md:text-3xl font-black uppercase tracking-tighter leading-none">
-                Slide to Podcast
+                {t.title}
                 </h1>
                 <div className="flex items-center gap-2 mt-1">
                     <span className={`px-2 py-0.5 text-[10px] font-bold uppercase text-white ${getColorClass(currentStyle.color, true)}`}>
                         {currentStyle.id === 'custom' ? 'CUSTOM' : 'PERSONA'}
                     </span>
-                    <span className="font-bold uppercase tracking-widest text-xs">{currentStyle.name}</span>
+                    <span className="font-bold uppercase tracking-widest text-xs">
+                        {language === 'en' ? currentStyle.nameEn : currentStyle.name}
+                    </span>
                 </div>
             </div>
+            {/* Language Toggle */}
+            <button 
+                onClick={() => setLanguage(language === 'ja' ? 'en' : 'ja')}
+                className="ml-2 px-2 py-1 border-2 border-bauhaus-black text-[10px] font-bold uppercase hover:bg-bauhaus-black hover:text-white transition-colors"
+            >
+                {language === 'ja' ? 'EN' : 'JP'}
+            </button>
           </div>
 
           {/* Stylish Custom Name Inputs */}
@@ -579,7 +611,7 @@ const App: React.FC = () => {
              {/* Host Input */}
              <div className="flex flex-col relative group">
                 <label className="text-[10px] font-black uppercase text-bauhaus-blue tracking-wider mb-1 flex items-center gap-1">
-                    <CircleIcon className="w-2 h-2" /> Host Name
+                    <CircleIcon className="w-2 h-2" /> {t.hostNameLabel}
                 </label>
                 <input 
                     type="text" 
@@ -593,7 +625,7 @@ const App: React.FC = () => {
              {/* Expert Input */}
              <div className="flex flex-col relative group">
                 <label className="text-[10px] font-black uppercase text-bauhaus-black tracking-wider mb-1 flex items-center gap-1">
-                    <TriangleIcon className="w-2 h-2 text-bauhaus-yellow" /> Expert Name
+                    <TriangleIcon className="w-2 h-2 text-bauhaus-yellow" /> {t.expertNameLabel}
                 </label>
                 <input 
                     type="text" 
@@ -616,25 +648,25 @@ const App: React.FC = () => {
                  <div className={`w-full max-w-xl border-4 border-dashed border-bauhaus-black p-12 text-center ${pdfFile ? 'bg-green-50' : ''}`}>
                     {!pdfFile ? (
                         <>
-                            <h3 className="text-2xl font-bold uppercase mb-4">PDFをアップロード</h3>
+                            <h3 className="text-2xl font-bold uppercase mb-4">{t.uploadPdfTitle}</h3>
                             <div className="flex flex-col gap-4 items-center">
                                 <label className="inline-block cursor-pointer">
                                     <input type="file" accept="application/pdf" onChange={handleFileChange} className="hidden" />
                                     <span className="px-6 py-3 bg-bauhaus-black text-white font-bold uppercase hover:bg-bauhaus-blue transition-colors">
-                                        ファイルを選択
+                                        {t.selectFile}
                                     </span>
                                 </label>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-xs font-bold uppercase text-gray-400">- OR -</span>
+                                    <span className="text-xs font-bold uppercase text-gray-400">{t.or}</span>
                                 </div>
-                                <ScriptImporter onImport={handleImportScript} />
+                                <ScriptImporter onImport={handleImportScript} label={t.import} />
                             </div>
                         </>
                     ) : (
                         <>
                             <h3 className="text-lg font-bold mb-6">{pdfFile.name}</h3>
                             <BauhausButton onClick={handleGenerateScript} disabled={isAnalyzing} className="w-full">
-                                {isAnalyzing ? "分析中..." : "台本を生成する"}
+                                {isAnalyzing ? t.analyzing : t.generateScript}
                             </BauhausButton>
                         </>
                     )}
@@ -648,27 +680,27 @@ const App: React.FC = () => {
                     {/* Tab Buttons */}
                     <div className="flex border-b-4 border-bauhaus-black bg-gray-100 flex-shrink-0 items-center justify-between pr-2">
                         <div className="flex">
-                            <button onClick={() => setActiveTab('script')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'script' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Script</button>
+                            <button onClick={() => setActiveTab('script')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'script' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>{t.tabScript}</button>
                             {currentStyle.id !== 'deep_dive' && (
-                                <button onClick={() => setActiveTab('slides')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'slides' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Presentation</button>
+                                <button onClick={() => setActiveTab('slides')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'slides' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>{t.tabPresentation}</button>
                             )}
                         </div>
                         
                         {activeTab === 'script' && (
                             <div className="flex items-center gap-2">
-                                <ScriptImporter onImport={handleImportScript} />
+                                <ScriptImporter onImport={handleImportScript} label={t.import} />
                                 <button 
                                     onClick={handleExportScript} 
                                     className="text-[10px] md:text-xs font-bold uppercase px-3 py-1.5 bg-white border-2 border-bauhaus-black hover:bg-gray-100 flex items-center gap-2"
                                 >
-                                    <span>💾 Export</span>
+                                    <span>💾 {t.export}</span>
                                 </button>
                                 <div className="w-px h-4 bg-gray-300 mx-1"></div>
                                 <button 
                                     onClick={() => setIsScriptEditing(!isScriptEditing)} 
                                     className={`text-[10px] md:text-xs font-bold uppercase px-3 py-1.5 border-2 border-bauhaus-black flex items-center gap-2 ${isScriptEditing ? 'bg-bauhaus-black text-white' : 'bg-white hover:bg-gray-100'}`}
                                 >
-                                    {isScriptEditing ? 'Done' : '✎ Edit'}
+                                    {isScriptEditing ? t.done : `✎ ${t.edit}`}
                                 </button>
                             </div>
                         )}
@@ -705,7 +737,7 @@ const App: React.FC = () => {
                                         </div>
                                     ))}
                                     {segments.length === 0 && (
-                                        <div className="text-center text-gray-400 mt-10">No script parsed. Check the Edit mode.</div>
+                                        <div className="text-center text-gray-400 mt-10">{t.noScript}</div>
                                     )}
                                 </div>
                             )}
@@ -736,7 +768,7 @@ const App: React.FC = () => {
                      onClick={() => setIsConfigOpen(true)}
                      className="ml-4 bg-white text-bauhaus-red px-3 py-1 uppercase text-xs font-black border-2 border-black hover:bg-black hover:text-white"
                    >
-                     設定を開く
+                     {t.settings}
                    </button>
                 )}
             </div>
@@ -773,7 +805,7 @@ const App: React.FC = () => {
                     className="py-2 px-4 text-xs font-bold w-full flex justify-center"
                     icon={<DownloadIcon className="w-3" />}
                   >
-                    保存
+                    {t.save}
                  </BauhausButton>
                  <button 
                     onClick={() => setIsConfigOpen(true)} 
@@ -804,12 +836,12 @@ const App: React.FC = () => {
                     </div>
                   ) : (
                     <div className="text-gray-300 font-bold uppercase text-xl md:text-3xl tracking-widest select-none">
-                        Ready to play
+                        {t.readyToPlay}
                     </div>
                   )
               ) : (
                  <div className="text-gray-300 font-bold uppercase text-xl md:text-3xl tracking-widest select-none">
-                    Slide to Podcast
+                    {t.title}
                  </div>
               )}
           </div>
@@ -819,13 +851,20 @@ const App: React.FC = () => {
       </div>
 
       {/* Modals */}
-      <ConfigurationModal isOpen={isConfigOpen} onClose={() => setIsConfigOpen(false)} selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} />
+      <ConfigurationModal 
+        isOpen={isConfigOpen} 
+        onClose={() => setIsConfigOpen(false)} 
+        selectedVoice={selectedVoice} 
+        onVoiceChange={setSelectedVoice}
+        language={language}
+      />
       <SystemPromptModal 
         isOpen={isPromptOpen} 
         onClose={() => setIsPromptOpen(false)} 
         prompt={customStylePrompt} 
         isEditable={currentStyle.id === 'custom'} 
-        onSave={(p, v, v2) => { setCustomStylePrompt(p); if(v) setSelectedVoice(v); if(v2) setSecondVoice(v2); }} 
+        onSave={(p, v, v2) => { setCustomStylePrompt(p); if(v) setSelectedVoice(v); if(v2) setSecondVoice(v2); }}
+        language={language}
       />
 
     </div>

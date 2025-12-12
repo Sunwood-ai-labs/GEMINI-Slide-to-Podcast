@@ -5,21 +5,25 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ALL_VOICES } from '../voices';
 import { BauhausButton } from './BauhausComponents';
+import { TRANSLATIONS } from '../constants';
 
 interface ConfigurationModalProps {
   isOpen: boolean;
   onClose: () => void;
   selectedVoice: string;
   onVoiceChange: (voiceName: string) => void;
+  language: 'ja' | 'en';
 }
 
 export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
   isOpen,
   onClose,
   selectedVoice,
-  onVoiceChange
+  onVoiceChange,
+  language
 }) => {
   const [filterGender, setFilterGender] = useState('ALL');
+  const t = TRANSLATIONS[language];
 
   // Filter voices
   const filteredVoices = useMemo(() => {
@@ -30,8 +34,6 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
   }, [filterGender]);
 
   // Focus Management (Only runs when isOpen changes)
-  // This prevents focus from jumping to the first element when the parent component re-renders
-  // but the modal remains open (e.g., when the flag cycler updates in App.tsx).
   useEffect(() => {
     if (!isOpen) return;
 
@@ -39,7 +41,6 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
     const modalElement = document.getElementById('config-modal');
 
     if (modalElement) {
-        // Find focusable elements
         const focusableElements = modalElement.querySelectorAll(
             'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         );
@@ -54,7 +55,7 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
     };
   }, [isOpen]);
 
-  // Keyboard Event Trap (Updates when dependencies like onClose change)
+  // Keyboard Event Trap
   useEffect(() => {
     if (!isOpen) return;
 
@@ -126,12 +127,12 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
         {/* Header */}
         <div className="bg-bauhaus-yellow border-b-4 border-bauhaus-black p-6 flex justify-between items-center flex-shrink-0">
           <h2 id="config-modal-title" className="text-2xl font-bold uppercase flex items-center gap-3">
-            <span className="text-3xl" aria-hidden="true">⚙</span> 設定
+            <span className="text-3xl" aria-hidden="true">⚙</span> {t.configTitle}
           </h2>
           <button 
             onClick={onClose}
             className="w-10 h-10 flex items-center justify-center bg-white border-4 border-black hover:bg-black hover:text-white transition-colors text-xl font-bold focus:outline-none focus:ring-4 focus:ring-bauhaus-red"
-            aria-label="設定を閉じる"
+            aria-label="Close Settings"
           >
             X
           </button>
@@ -145,10 +146,10 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
                 <h3 className="text-lg font-bold uppercase mb-1 flex items-center gap-2">
-                  🔑 API Key Settings
+                  🔑 {t.apiKeyTitle}
                 </h3>
                 <p className="text-xs font-bold text-gray-500 max-w-md">
-                  "Resource Exhausted" (429 Error) が発生する場合は、こちらから有料プランのAPIキーを選択してください。
+                  {t.apiKeyDesc}
                 </p>
                 <a 
                   href="https://ai.google.dev/gemini-api/docs/billing" 
@@ -156,7 +157,7 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
                   rel="noopener noreferrer" 
                   className="text-[10px] font-bold uppercase text-bauhaus-blue underline hover:text-bauhaus-black mt-1 inline-block"
                 >
-                  Google AI Studio 料金プランについて
+                  {t.apiKeyLink}
                 </a>
               </div>
               <BauhausButton 
@@ -164,36 +165,36 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
                 variant="secondary"
                 className="text-sm py-2 px-4 whitespace-nowrap w-full md:w-auto"
               >
-                APIキーを選択 / 変更
+                {t.selectKeyBtn}
               </BauhausButton>
             </div>
           </div>
 
           <div className="mb-4">
-            <label className="block text-xl font-bold uppercase mb-1">スピーカーのボイスを選択</label>
-            <p className="text-sm text-gray-600 font-bold uppercase">これらのボイスは多言語対応で、テキストに合わせて適応します。</p>
+            <label className="block text-xl font-bold uppercase mb-1">{t.voiceSelectTitle}</label>
+            <p className="text-sm text-gray-600 font-bold uppercase">{t.voiceSelectDesc}</p>
           </div>
           
           {/* Filters */}
           <div className="flex flex-col md:flex-row gap-4 mb-6">
             <div className="flex-1">
-              <label htmlFor="gender-filter" className="block text-xs font-bold uppercase mb-2">性別</label>
+              <label htmlFor="gender-filter" className="block text-xs font-bold uppercase mb-2">{t.gender}</label>
               <select 
                 id="gender-filter"
                 className="w-full p-3 border-4 border-bauhaus-black font-bold bg-white focus:outline-none focus:shadow-hard-sm focus:ring-4 focus:ring-bauhaus-yellow"
                 value={filterGender}
                 onChange={(e) => setFilterGender(e.target.value)}
               >
-                <option value="ALL">すべて</option>
-                <option value="MALE">男性</option>
-                <option value="FEMALE">女性</option>
+                <option value="ALL">{t.all}</option>
+                <option value="MALE">{t.male}</option>
+                <option value="FEMALE">{t.female}</option>
               </select>
             </div>
           </div>
 
           {/* Voice List */}
           <div className="flex-1 overflow-y-auto min-h-[300px] border-4 border-bauhaus-black bg-white p-2">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3" role="radiogroup" aria-label="ボイス選択">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3" role="radiogroup" aria-label="Voice Selection">
               {filteredVoices.map((voice) => (
                 <label 
                   key={voice.name}
@@ -230,7 +231,7 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
               ))}
               {filteredVoices.length === 0 && (
                 <div className="col-span-2 text-center p-8 text-gray-500 font-bold">
-                  条件に合うボイスが見つかりません。
+                  {t.notFound}
                 </div>
               )}
             </div>

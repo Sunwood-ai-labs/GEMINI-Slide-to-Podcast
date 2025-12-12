@@ -5,7 +5,9 @@
 export interface IntroStyle {
   id: string;
   name: string;
+  nameEn: string;
   description: string;
+  descriptionEn: string;
   defaultVoice: string; // Gemini voice name for Speaker 1 (Host)
   secondVoice?: string; // Gemini voice name for Speaker 2 (Expert/Guest)
   templateText: string;

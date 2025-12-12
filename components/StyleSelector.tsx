@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState, useEffect } from 'react';
-import { INTRO_STYLES } from '../constants';
+import { INTRO_STYLES, TRANSLATIONS } from '../constants';
 import { getIcon, getColorClass } from './BauhausComponents';
 import { IntroStyle } from '../types';
 
@@ -12,6 +12,7 @@ interface StyleSelectorProps {
   onSelect: (style: IntroStyle) => void;
   onCustomize: () => void;
   isCollapsed: boolean;
+  language: 'ja' | 'en';
 }
 
 interface StyleButtonProps {
@@ -20,6 +21,7 @@ interface StyleButtonProps {
   onClick: () => void;
   effectiveAvatarSrc?: string;
   isCollapsed: boolean;
+  language: 'ja' | 'en';
 }
 
 const StyleButton: React.FC<StyleButtonProps> = ({ 
@@ -27,14 +29,16 @@ const StyleButton: React.FC<StyleButtonProps> = ({
   isSelected, 
   onClick,
   effectiveAvatarSrc,
-  isCollapsed
+  isCollapsed,
+  language
 }) => {
   const [imgError, setImgError] = useState(false);
+  const displayName = language === 'en' ? style.nameEn : style.name;
 
   return (
     <button
       onClick={onClick}
-      title={isCollapsed ? style.name : undefined}
+      title={isCollapsed ? displayName : undefined}
       className={`
         group relative flex items-center transition-all border-b-4 border-bauhaus-black
         ${isCollapsed ? 'justify-center p-4' : 'gap-4 p-6 text-left'}
@@ -49,7 +53,7 @@ const StyleButton: React.FC<StyleButtonProps> = ({
         {effectiveAvatarSrc && !imgError ? (
           <img 
             src={effectiveAvatarSrc} 
-            alt={style.name} 
+            alt={displayName} 
             className="w-full h-full object-cover"
             onError={() => setImgError(true)}
           />
@@ -60,7 +64,7 @@ const StyleButton: React.FC<StyleButtonProps> = ({
       
       {!isCollapsed && (
         <div className="min-w-0">
-          <div className="font-bold uppercase text-lg leading-tight mb-1">{style.name}</div>
+          <div className="font-bold uppercase text-lg leading-tight mb-1">{displayName}</div>
         </div>
       )}
       
@@ -74,8 +78,9 @@ const StyleButton: React.FC<StyleButtonProps> = ({
   );
 };
 
-export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onSelect, onCustomize, isCollapsed }) => {
+export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onSelect, onCustomize, isCollapsed, language }) => {
   const [loadedAvatars, setLoadedAvatars] = useState<Record<string, string>>({});
+  const t = TRANSLATIONS[language];
 
   // Load thumbnails via fetch to bypass potential img tag static serving issues
   useEffect(() => {
@@ -107,6 +112,8 @@ export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onS
     };
   }, []);
 
+  const customLabel = language === 'en' ? 'Create Custom' : 'カスタム作成';
+
   return (
     <div className="flex flex-col h-full bg-bauhaus-white">
       
@@ -120,12 +127,13 @@ export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onS
               onClick={() => onSelect(style)}
               effectiveAvatarSrc={loadedAvatars[style.id] || style.avatarSrc}
               isCollapsed={isCollapsed}
+              language={language}
             />
           ))}
 
           <button
             onClick={onCustomize}
-            title={isCollapsed ? 'カスタム作成' : undefined}
+            title={isCollapsed ? t.customCreate : undefined}
             className={`
               group relative flex items-center transition-all border-b-4 border-bauhaus-black
               ${isCollapsed ? 'justify-center p-4' : 'gap-4 p-6 text-left'}
@@ -140,7 +148,7 @@ export const StyleSelector: React.FC<StyleSelectorProps> = ({ selectedStyle, onS
                 </div>
                 {!isCollapsed && (
                     <div className="min-w-0">
-                    <div className="font-bold uppercase text-lg leading-tight mb-1">カスタム作成</div>
+                    <div className="font-bold uppercase text-lg leading-tight mb-1">{t.customCreate}</div>
                     </div>
                 )}
                 {selectedStyle.id === 'custom' && (
