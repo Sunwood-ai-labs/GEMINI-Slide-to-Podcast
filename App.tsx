@@ -4,13 +4,13 @@
 */
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { INTRO_STYLES, CUSTOM_STYLE, SUPPORTED_LANGUAGES } from './constants';
-import { IntroStyle } from './types';
+import { IntroStyle, ScriptSegment } from './types';
 import { ALL_VOICES } from './voices';
 import { StyleSelector } from './components/StyleSelector';
 import { BauhausButton, getColorClass, DownloadIcon, SquareIcon, RectIcon, IndeterminateProgressBar, CircleIcon, TriangleIcon } from './components/BauhausComponents';
 import { ConfigurationModal } from './components/ConfigurationModal';
 import { SystemPromptModal } from './components/SystemPromptModal';
-import { generateSpeech, createWavBlob, dramatizeText, generateScriptFromPDF } from './services/geminiService';
+import { generateSpeech, createWavBlob, dramatizeText, generateScriptFromPDF, generateSequencedSpeech } from './services/geminiService';
 // @ts-ignore
 import * as pdfjsDist from 'pdfjs-dist';
 
@@ -27,24 +27,22 @@ const Footer: React.FC<{ className?: string }> = ({ className }) => (
   </div>
 );
 
-// --- Helper Types for Script Parsing ---
-interface ScriptSegment {
-  id: string;
-  slideIndex: number; // 0-based index corresponding to image array
-  speaker: 'Host' | 'Expert';
-  text: string;
-  startTime: number; // Estimated start time in seconds
-  endTime: number; // Estimated end time in seconds
+// --- Parsing Logic ---
+// Updated to handle dynamic names
+function escapeRegExp(string: string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// --- Parsing Logic ---
-const parseScriptToSegments = (fullText: string): ScriptSegment[] => {
+const parseScriptToSegments = (fullText: string, hostName: string, expertName: string): ScriptSegment[] => {
   const segments: ScriptSegment[] = [];
   const slideBlocks = fullText.split(/\[(?:\*\*)?SLIDE\s+(\d+)(?:\*\*)?\]/i);
   
   let currentSlideIndex = 0;
   let runningTime = 0;
   const CHARS_PER_SEC = 12; 
+
+  const hostRegex = new RegExp(`^(?:\\*\\*)?(?:Host|${escapeRegExp(hostName)})(?:\\*\\*)?:`, 'i');
+  const expertRegex = new RegExp(`^(?:\\*\\*)?(?:Expert|${escapeRegExp(expertName)})(?:\\*\\*)?:`, 'i');
 
   for (let i = 0; i < slideBlocks.length; i++) {
     const block = slideBlocks[i];
@@ -63,12 +61,12 @@ const parseScriptToSegments = (fullText: string): ScriptSegment[] => {
       let speaker: 'Host' | 'Expert' | null = null;
       let content = trimmed;
 
-      if (/^(?:\*\*)?Host(?:\*\*)?:/i.test(trimmed)) {
+      if (hostRegex.test(trimmed)) {
         speaker = 'Host';
-        content = trimmed.replace(/^(?:\*\*)?Host(?:\*\*)?:/i, '').trim();
-      } else if (/^(?:\*\*)?Expert(?:\*\*)?:/i.test(trimmed)) {
+        content = trimmed.replace(hostRegex, '').trim();
+      } else if (expertRegex.test(trimmed)) {
         speaker = 'Expert';
-        content = trimmed.replace(/^(?:\*\*)?Expert(?:\*\*)?:/i, '').trim();
+        content = trimmed.replace(expertRegex, '').trim();
       }
 
       if (speaker && content) {
@@ -217,8 +215,8 @@ const App: React.FC = () => {
   // --- Core State ---
   const [currentStyle, setCurrentStyle] = useState<IntroStyle>(INTRO_STYLES[0]);
   const [text, setText] = useState<string>("");
-  const [hostName, setHostName] = useState("HOST");
-  const [expertName, setExpertName] = useState("EXPERT");
+  const [hostName, setHostName] = useState("こはく");
+  const [expertName, setExpertName] = useState("まき");
   
   // --- Audio/Playback State ---
   const [isPlaying, setIsPlaying] = useState(false);
@@ -257,13 +255,15 @@ const App: React.FC = () => {
 
   // --- Effects ---
 
-  // Re-parse script when text changes
+  // Re-parse script when text or names change
   useEffect(() => {
     if (text) {
-      const parsed = parseScriptToSegments(text);
+      const parsed = parseScriptToSegments(text, hostName, expertName);
       setSegments(parsed);
+      // When text changes, downloadData becomes invalid, so we reset
+      setDownloadData(null);
     }
-  }, [text]);
+  }, [text, hostName, expertName]);
 
   // Sync logic
   useEffect(() => {
@@ -275,23 +275,16 @@ const App: React.FC = () => {
         setCurrentTime(t);
         setDuration(audioElemRef.current.duration || 0);
 
-        // Best Effort Sync
-        const totalEstimated = segments.length > 0 ? segments[segments.length - 1].endTime : 0;
-        const actualDuration = audioElemRef.current.duration;
-        
-        let adjustedTime = t;
-        if (actualDuration && totalEstimated > 0) {
-           const ratio = totalEstimated / actualDuration;
-           adjustedTime = t * ratio;
-        }
-
-        const foundIndex = segments.findIndex(seg => adjustedTime >= seg.startTime && adjustedTime < seg.endTime);
+        // Exact Sync with buffered segments
+        const foundIndex = segments.findIndex(seg => t >= seg.startTime && t < seg.endTime);
         
         if (foundIndex !== -1) {
           setActiveSegmentIndex(foundIndex);
           setActiveSlideIndex(segments[foundIndex].slideIndex);
-        } else if (adjustedTime >= totalEstimated) {
+        } else if (segments.length > 0 && t >= segments[segments.length - 1].endTime) {
+           // Ended or near end
            setActiveSegmentIndex(segments.length - 1);
+           setActiveSlideIndex(segments[segments.length - 1].slideIndex);
         }
 
         animationFrameId = requestAnimationFrame(updateSync);
@@ -321,6 +314,11 @@ const App: React.FC = () => {
     if (style.secondVoice) setSecondVoice(style.secondVoice);
     setError(null);
     setDownloadData(null); 
+    
+    // Deep Dive defaults to script view (Text Only UI)
+    if (style.id === 'deep_dive') {
+      setActiveTab('script');
+    }
   };
 
   const handleCustomize = () => {
@@ -357,7 +355,7 @@ const App: React.FC = () => {
     setError(null);
     try {
         const prompt = currentStyle.id === 'custom' ? customStylePrompt : currentStyle.description;
-        const generatedScript = await generateScriptFromPDF(pdfBase64, prompt);
+        const generatedScript = await generateScriptFromPDF(pdfBase64, prompt, hostName, expertName);
         setText(generatedScript);
         setScriptGenerated(true);
         setActiveTab('script'); 
@@ -428,7 +426,7 @@ const App: React.FC = () => {
       return;
     }
 
-    if (scriptGenerated) setActiveTab('slides');
+    if (scriptGenerated && currentStyle.id !== 'deep_dive') setActiveTab('slides');
 
     if (audioElemRef.current && audioElemRef.current.paused && audioElemRef.current.currentTime > 0) {
         await audioElemRef.current.play();
@@ -452,12 +450,19 @@ const App: React.FC = () => {
     const currentGenId = ++generationIdRef.current;
     
     try {
-      const prompt = currentStyle.id === 'custom' ? customStylePrompt : currentStyle.description;
-      const result = await generateSpeech(text, selectedVoice, secondVoice, prompt);
+      // 1. Parse current text to segments (redundant but ensures fresh copy)
+      const currentSegments = parseScriptToSegments(text, hostName, expertName);
+      if (currentSegments.length === 0) throw new Error("No valid script segments found. Ensure text uses 'Host:', 'Expert:', or your custom names as labels.");
+
+      // 2. Generate audio for each segment to get exact durations
+      const result = await generateSequencedSpeech(currentSegments, selectedVoice, secondVoice);
       
       if (currentGenId !== generationIdRef.current) return;
 
-      const blob = createWavBlob(result.rawData);
+      // 3. Update segments state with exact timings from audio generation
+      setSegments(result.segments);
+
+      const blob = createWavBlob(result.audio.rawData);
       const url = URL.createObjectURL(blob);
       setDownloadData({ url, filename: `podcast-${Date.now()}.wav` });
       
@@ -471,7 +476,7 @@ const App: React.FC = () => {
 
     } catch (err) {
       console.error(err);
-      setError("音声生成に失敗しました。");
+      setError("音声生成に失敗しました: " + (err instanceof Error ? err.message : String(err)));
       setIsGenerating(false);
     }
   };
@@ -597,7 +602,9 @@ const App: React.FC = () => {
                     <div className="flex border-b-4 border-bauhaus-black bg-gray-100 flex-shrink-0 items-center justify-between pr-2">
                         <div className="flex">
                             <button onClick={() => setActiveTab('script')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'script' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Script</button>
-                            <button onClick={() => setActiveTab('slides')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'slides' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Presentation</button>
+                            {currentStyle.id !== 'deep_dive' && (
+                                <button onClick={() => setActiveTab('slides')} className={`px-6 py-2 font-bold uppercase text-sm md:text-base ${activeTab === 'slides' ? 'bg-white text-black border-r-2 border-bauhaus-black' : 'text-gray-500 hover:bg-gray-200'}`}>Presentation</button>
+                            )}
                         </div>
                         
                         {activeTab === 'script' && (

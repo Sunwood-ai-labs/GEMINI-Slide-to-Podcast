@@ -6,31 +6,6 @@ import { IntroStyle } from './types';
 
 export const INTRO_STYLES: IntroStyle[] = [
   {
-    id: 'deep_dive',
-    name: 'Deep Dive (2 Hosts)',
-    description: `THE DEEP DIVE (本質の深掘り)
-# AUDIO PROFILE: Sascha & Marina
-## "Dual Perspective" (二つの視点)
-
-## The Scene: ポッドキャストスタジオ
-メインホスト（Host）と、鋭い洞察を持つエキスパート（Expert）の対話形式。
-Hostは進行役として視聴者の疑問を代弁し、Expertはスライドのデータから深い意味を読み解く。
-
-### HOSTING STYLE
-* **対話:** Hostが質問し、Expertが答える、あるいは互いに意見を交わす。
-* **テンポ:** 知的でリズミカルな掛け合い。
-* **状況:** **デザインやレイアウトには一切触れない。** リスナーはスライドを見ていない前提で、スライドに書かれている「言葉の意味」や「主張の重要性」だけを熱く語る。
-
-### SAMPLE CONTEXT
-複雑な資料の本質だけを抜き出し、ラジオ番組のように深く解説する。`,
-    defaultVoice: 'Puck', // Host (Male-ish)
-    secondVoice: 'Kore', // Expert (Female-ish)
-    color: 'blue',
-    icon: 'square',
-    avatarSrc: 'https://www.gstatic.com/aistudio/starter-apps/synergy-intro/podcaster.png',
-    templateText: "" // Empty to trigger upload state
-  },
-  {
     id: 'visual_commentary',
     name: 'Slide Walkthrough',
     description: `VISUAL COMMENTARY (スライド実況)
@@ -54,6 +29,31 @@ HostとGuestが一緒に画面を見ながら、注目すべきポイントを�
     icon: 'triangle',
     avatarSrc: 'https://www.gstatic.com/aistudio/starter-apps/synergy-intro/radio.jpeg',
     templateText: ""
+  },
+  {
+    id: 'deep_dive',
+    name: 'Deep Dive (2 Hosts)',
+    description: `THE DEEP DIVE (本質の深掘り)
+# AUDIO PROFILE: Sascha & Marina
+## "Dual Perspective" (二つの視点)
+
+## The Scene: ポッドキャストスタジオ
+メインホスト（Host）と、鋭い洞察を持つエキスパート（Expert）の対話形式。
+Hostは進行役として視聴者の疑問を代弁し、Expertはスライドのデータから深い意味を読み解く。
+
+### HOSTING STYLE
+* **対話:** Hostが質問し、Expertが答える、あるいは互いに意見を交わす。
+* **テンポ:** 知的でリズミカルな掛け合い。
+* **状況:** **デザインやレイアウトには一切触れない。** リスナーはスライドを見ていない前提で、スライドに書かれている「言葉の意味」や「主張の重要性」だけを熱く語る。
+
+### SAMPLE CONTEXT
+複雑な資料の本質だけを抜き出し、ラジオ番組のように深く解説する。`,
+    defaultVoice: 'Puck', // Host (Male-ish)
+    secondVoice: 'Kore', // Expert (Female-ish)
+    color: 'blue',
+    icon: 'square',
+    avatarSrc: 'https://www.gstatic.com/aistudio/starter-apps/synergy-intro/podcaster.png',
+    templateText: "" // Empty to trigger upload state
   }
 ];
 

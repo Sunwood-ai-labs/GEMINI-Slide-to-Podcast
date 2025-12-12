@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import { GoogleGenAI, Modality } from "@google/genai";
+import { ScriptSegment } from "../types";
 
 // Initialize Gemini Client
-// Note: We use process.env.API_KEY as per instructions.
 const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Audio Decoding Helper
@@ -86,44 +86,72 @@ export interface GeneratedAudio {
   rawData: Uint8Array;
 }
 
+// -- helper to concatenate buffers --
+function concatenateAudioBuffers(buffers: AudioBuffer[], context: AudioContext): AudioBuffer {
+    const totalLength = buffers.reduce((acc, b) => acc + b.length, 0);
+    const result = context.createBuffer(1, totalLength, 24000); // 24000 is typical for Gemini TTS
+    
+    let offset = 0;
+    const outputData = result.getChannelData(0);
+    
+    for (const buf of buffers) {
+        const inputData = buf.getChannelData(0);
+        outputData.set(inputData, offset);
+        offset += buf.length;
+    }
+    
+    return result;
+}
+
+// -- Internal helper for single speaker generation --
+async function generateSingleSpeakerAudio(text: string, voiceName: string): Promise<GeneratedAudio> {
+    const ai = getClient();
+    
+    const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: text }] }],
+        config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+                voiceConfig: {
+                    prebuiltVoiceConfig: { voiceName: voiceName }
+                }
+            },
+        },
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) throw new Error("No audio data returned.");
+
+    const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    try {
+        const audioBytes = decode(base64Audio);
+        const audioBuffer = await decodeAudioData(audioBytes, outputAudioContext, 24000, 1);
+        return { buffer: audioBuffer, rawData: audioBytes };
+    } finally {
+        await outputAudioContext.close();
+    }
+}
+
 export const generateSpeech = async (
   text: string, 
   hostVoice: string,
   expertVoice?: string,
-  styleInstruction?: string
 ): Promise<GeneratedAudio> => {
+  // Legacy multi-speaker support for raw text
+  // NOTE: This might be brittle with short texts, prefer generateSequencedSpeech
   const ai = getClient();
-  
-  // Remove slide markers for TTS generation to avoid reading them aloud
-  // Handles [SLIDE 1], [**SLIDE 1**], etc.
   const cleanText = text.replace(/\[(?:\*\*)?SLIDE\s+\d+(?:\*\*)?\]/gi, '').trim();
-
-  // Determine if the text is already in script format (Host: ... Expert: ...)
   const isScript = cleanText.includes('Host:') || cleanText.includes('Expert:');
-  
-  // If no expert voice provided, pick a default generic one (though app usually provides one)
   const safeExpertVoice = expertVoice || 'Kore';
-
-  // If it's a script, we send it as is. If it's raw text, we wrap it in a speaker label.
-  const inputContents = isScript 
-    ? cleanText 
-    : `Host: ${cleanText}`;
+  // Add preamble to help model understand it's a script to read
+  const inputContents = isScript ? `Read the following dialogue:\n${cleanText}` : `Read the following text:\nHost: ${cleanText}`;
 
   const voiceConfig = {
     multiSpeakerVoiceConfig: {
       speakerVoiceConfigs: [
-        {
-          speaker: 'Host',
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: hostVoice },
-          }
-        },
-        {
-          speaker: 'Expert',
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: safeExpertVoice },
-          }
-        }
+        { speaker: 'Host', voiceConfig: { prebuiltVoiceConfig: { voiceName: hostVoice } } },
+        { speaker: 'Expert', voiceConfig: { prebuiltVoiceConfig: { voiceName: safeExpertVoice } } }
       ]
     }
   };
@@ -139,39 +167,98 @@ export const generateSpeech = async (
     });
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) throw new Error("No audio data returned.");
 
-    if (!base64Audio) {
-      throw new Error("No audio data returned from Gemini.");
-    }
-
-    const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-      sampleRate: 24000, 
-    });
-
+    const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     try {
       const audioBytes = decode(base64Audio);
       const audioBuffer = await decodeAudioData(audioBytes, outputAudioContext, 24000, 1);
-      
       return { buffer: audioBuffer, rawData: audioBytes };
     } finally {
       await outputAudioContext.close();
     }
-
   } catch (error) {
     console.error("Error generating speech:", error);
-    if (typeof error === 'object' && error !== null) {
-      console.error("Detailed Error Details:", JSON.stringify(error, null, 2));
-    }
     throw error;
   }
 };
 
+/**
+ * Generates audio segment by segment to ensure perfect synchronization.
+ * Uses Single Speaker config per segment to be robust against "non-audio response" errors.
+ */
+export const generateSequencedSpeech = async (
+    segments: ScriptSegment[],
+    hostVoice: string,
+    expertVoice: string
+): Promise<{ audio: GeneratedAudio, segments: ScriptSegment[] }> => {
+    
+    const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    const audioBuffers: AudioBuffer[] = [];
+    const updatedSegments: ScriptSegment[] = [];
+    
+    let currentOffset = 0;
+
+    try {
+        // Generate sequentially to avoid rate limits and ensure order
+        for (const segment of segments) {
+            const speaker = segment.speaker;
+            const text = segment.text.trim();
+            if (!text) continue;
+
+            const voiceName = speaker === 'Host' ? hostVoice : expertVoice;
+            
+            // Use Single Speaker generation for robustness
+            const audioResult = await generateSingleSpeakerAudio(text, voiceName);
+            
+            const duration = audioResult.buffer.duration;
+            audioBuffers.push(audioResult.buffer);
+            
+            updatedSegments.push({
+                ...segment,
+                startTime: currentOffset,
+                endTime: currentOffset + duration
+            });
+            
+            currentOffset += duration;
+        }
+
+        if (audioBuffers.length === 0) {
+            throw new Error("No audio generated.");
+        }
+
+        // Stitch together
+        const combinedBuffer = concatenateAudioBuffers(audioBuffers, outputAudioContext);
+        
+        // Convert back to raw Uint8Array for WAV creation
+        const channelData = combinedBuffer.getChannelData(0);
+        const rawData = new Int16Array(channelData.length);
+        for (let i = 0; i < channelData.length; i++) {
+            // Float to 16-bit PCM
+            const s = Math.max(-1, Math.min(1, channelData[i]));
+            rawData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        
+        return {
+            audio: {
+                buffer: combinedBuffer,
+                rawData: new Uint8Array(rawData.buffer)
+            },
+            segments: updatedSegments
+        };
+
+    } finally {
+        await outputAudioContext.close();
+    }
+};
+
 export const generateScriptFromPDF = async (
   pdfBase64: string, 
-  personalityDescription: string
+  personalityDescription: string,
+  hostName: string,
+  expertName: string
 ): Promise<string> => {
   const ai = getClient();
-
   const prompt = `
     あなたは2人のポッドキャストパーソナリティ（HostとExpert）のプロデューサーです。
     添付されたPDF（スライド資料）を元に、この2人が内容について語り合うポッドキャストの台本を作成してください。
@@ -179,14 +266,25 @@ export const generateScriptFromPDF = async (
     【設定】
     ${personalityDescription}
 
+    【重要: キャラクター名】
+    - Hostの役名は「${hostName}」です。
+    - Expertの役名は「${expertName}」です。
+    - 台本内の会話で相手を呼ぶときは、必ず「${hostName}さん」「${expertName}さん」と呼んでください。
+    
+    【台本のフォーマット】
+    各発言の冒頭には、必ず話者の名前をラベルとして付けてください。
+    例:
+    ${hostName}: こんにちは、${expertName}さん。
+    ${expertName}: はい、${hostName}さん。今日は...
+
     【構造とマーカー（重要）】
     **話している対象のスライドが変わるタイミングで、必ず \`[SLIDE X]\` （Xはページ番号1, 2...）というマーカーを挿入してください。**
     例:
     [SLIDE 1]
-    Host: こんにちは、今回のテーマはこちらです。
-    Expert: 面白そうですね。
+    ${hostName}: こんにちは、今回のテーマはこちらです。
+    ${expertName}: 面白そうですね。
     [SLIDE 2]
-    Host: さて、まずは現状の課題から見ていきましょう。
+    ${hostName}: さて、まずは現状の課題から見ていきましょう。
 
     【絶対に守るべき禁止事項】
     1. **視覚的描写の完全禁止**:
@@ -197,15 +295,8 @@ export const generateScriptFromPDF = async (
 
     【指示: 本質の深掘り】
     1. **意味を問う**:
-       - Host: 単に読み上げるのではなく、「これってつまりどういうこと？」「なぜこれが重要なの？」と問うてください。
-       - Expert: データの裏にある「企業の意図」「市場への影響」を推測して解説してください。
-
-    【フォーマット】
-    [SLIDE 1]
-    Host: [セリフ]
-    Expert: [セリフ]
-    [SLIDE 2]
-    ...
+       - Host (${hostName}): 単に読み上げるのではなく、「これってつまりどういうこと？」「なぜこれが重要なの？」と問うてください。
+       - Expert (${expertName}): データの裏にある「企業の意図」「市場への影響」を推測して解説してください。
   `;
 
   try {
@@ -213,12 +304,7 @@ export const generateScriptFromPDF = async (
       model: "gemini-2.5-flash",
       contents: {
         parts: [
-          {
-            inlineData: {
-              data: pdfBase64,
-              mimeType: 'application/pdf',
-            },
-          },
+          { inlineData: { data: pdfBase64, mimeType: 'application/pdf' } },
           { text: prompt },
         ],
       },
@@ -233,17 +319,14 @@ export const generateScriptFromPDF = async (
 
 export const dramatizeText = async (text: string, styleInstruction?: string): Promise<string> => {
   const ai = getClient();
-  
   const prompt = `
     以下のポッドキャスト台本を、指定されたスタイルに合わせてリライト（推敲）してください。
     ただし、以下のルールを厳守してください。
-
     1. **マーカーの維持**: \`[SLIDE 1]\`, \`[SLIDE 2]\` などのスライドマーカーは、**位置を変えずにそのまま残してください**。これはシステムがスライドを切り替えるために必須です。
-    2. **対話形式の維持**: \`Host:\` と \`Expert:\` の形式を守ってください。
+    2. **話者ラベルの維持**: 現在のラベル（例: Host: または 名前:）を変更しないでください。
     3. **視覚描写の削除**: 「デザイン」「色」「レイアウト」への言及はすべて削除し、本質の議論に置き換えてください。
 
     スタイル指示: ${styleInstruction}
-    
     入力テキスト:
     "${text}"
   `;
@@ -253,7 +336,6 @@ export const dramatizeText = async (text: string, styleInstruction?: string): Pr
       model: "gemini-2.5-flash",
       contents: prompt,
     });
-
     return response.text || text;
   } catch (error) {
     console.error("Error dramatizing text:", error);

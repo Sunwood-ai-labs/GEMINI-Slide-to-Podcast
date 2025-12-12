@@ -19,3 +19,12 @@ export interface VoiceOption {
   name: string;
   ssmlGender: string;
 }
+
+export interface ScriptSegment {
+  id: string;
+  slideIndex: number; // 0-based index corresponding to image array
+  speaker: 'Host' | 'Expert';
+  text: string;
+  startTime: number; // Estimated or actual start time in seconds
+  endTime: number; // Estimated or actual end time in seconds
+}
