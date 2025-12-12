@@ -39,10 +39,13 @@ const parseScriptToSegments = (fullText: string, hostName: string, expertName: s
   
   let currentSlideIndex = 0;
   let runningTime = 0;
-  const CHARS_PER_SEC = 12; 
+  const CHARS_PER_SEC = 15; 
 
-  const hostRegex = new RegExp(`^(?:\\*\\*)?(?:Host|${escapeRegExp(hostName)})(?:\\*\\*)?:`, 'i');
-  const expertRegex = new RegExp(`^(?:\\*\\*)?(?:Expert|${escapeRegExp(expertName)})(?:\\*\\*)?:`, 'i');
+  // Include colon variants
+  const hostRegex = new RegExp(`^(?:\\*\\*)?(?:Host|${escapeRegExp(hostName)})(?:\\*\\*)?[:：]`, 'i');
+  const expertRegex = new RegExp(`^(?:\\*\\*)?(?:Expert|${escapeRegExp(expertName)})(?:\\*\\*)?[:：]`, 'i');
+
+  let currentSpeaker: 'Host' | 'Expert' | null = null;
 
   for (let i = 0; i < slideBlocks.length; i++) {
     const block = slideBlocks[i];
@@ -58,28 +61,40 @@ const parseScriptToSegments = (fullText: string, hostName: string, expertName: s
       const trimmed = line.trim();
       if (!trimmed) continue;
 
-      let speaker: 'Host' | 'Expert' | null = null;
       let content = trimmed;
 
       if (hostRegex.test(trimmed)) {
-        speaker = 'Host';
+        currentSpeaker = 'Host';
         content = trimmed.replace(hostRegex, '').trim();
       } else if (expertRegex.test(trimmed)) {
-        speaker = 'Expert';
+        currentSpeaker = 'Expert';
         content = trimmed.replace(expertRegex, '').trim();
       }
+      
+      // If we have an identified speaker, process the text
+      // (Even if no new label is present, we assume continued speech from currentSpeaker)
+      if (currentSpeaker && content) {
+        // Split by punctuation: 。！？ . ! ?
+        // Using lookbehind to keep punctuation with the sentence if supported, 
+        // fallback to split-join strategy if regex lookbehind issues (but modern browsers support it).
+        // Strategy: Split *after* punctuation.
+        const rawSentences = content.split(/(?<=[。！？\.\!\?])\s+/);
 
-      if (speaker && content) {
-        const duration = Math.max(2.0, content.length / CHARS_PER_SEC);
-        segments.push({
-          id: Math.random().toString(36).substr(2, 9),
-          slideIndex: currentSlideIndex,
-          speaker,
-          text: content,
-          startTime: runningTime,
-          endTime: runningTime + duration
-        });
-        runningTime += duration;
+        for (const sentence of rawSentences) {
+            const cleanSentence = sentence.trim();
+            if (!cleanSentence) continue;
+
+            const duration = Math.max(1.5, cleanSentence.length / CHARS_PER_SEC);
+            segments.push({
+              id: Math.random().toString(36).substr(2, 9),
+              slideIndex: currentSlideIndex,
+              speaker: currentSpeaker,
+              text: cleanSentence,
+              startTime: runningTime,
+              endTime: runningTime + duration
+            });
+            runningTime += duration;
+        }
       }
     }
   }
@@ -474,9 +489,24 @@ const App: React.FC = () => {
       audio.onended = () => { setIsPlaying(false); setActiveSegmentIndex(-1); };
       await audio.play();
 
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("音声生成に失敗しました: " + (err instanceof Error ? err.message : String(err)));
+      
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorStr = JSON.stringify(err);
+
+      // Explicitly check for quota/429 errors to guide user to Settings
+      if (
+        errorMessage.includes("429") || 
+        errorMessage.includes("quota") || 
+        errorMessage.includes("RESOURCE_EXHAUSTED") ||
+        errorStr.includes("429") ||
+        errorStr.includes("RESOURCE_EXHAUSTED")
+      ) {
+        setError("API利用枠の上限に達しました(429)。設定(⚙)からAPIキーを有料プランのものに変更してください。");
+      } else {
+        setError("音声生成に失敗しました: " + errorMessage);
+      }
       setIsGenerating(false);
     }
   };
@@ -681,7 +711,19 @@ const App: React.FC = () => {
           </div>
 
           {/* Error Display */}
-          {error && <div className="mt-4 p-4 bg-bauhaus-red text-white font-bold border-4 border-bauhaus-black">Error: {error}</div>}
+          {error && (
+            <div className="mt-4 p-4 bg-bauhaus-red text-white font-bold border-4 border-bauhaus-black flex justify-between items-center">
+                <span>Error: {error}</span>
+                {error.includes("429") && (
+                   <button 
+                     onClick={() => setIsConfigOpen(true)}
+                     className="ml-4 bg-white text-bauhaus-red px-3 py-1 uppercase text-xs font-black border-2 border-black hover:bg-black hover:text-white"
+                   >
+                     設定を開く
+                   </button>
+                )}
+            </div>
+          )}
         </div>
 
         {/* Action Bar & Subtitles */}

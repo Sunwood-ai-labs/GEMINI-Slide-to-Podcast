@@ -4,6 +4,7 @@
 */
 import React, { useState, useMemo, useEffect } from 'react';
 import { ALL_VOICES } from '../voices';
+import { BauhausButton } from './BauhausComponents';
 
 interface ConfigurationModalProps {
   isOpen: boolean;
@@ -96,6 +97,18 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
     };
   }, [isOpen, onClose]);
 
+  const handleApiKeySelect = async () => {
+    if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
+      try {
+        await (window as any).aistudio.openSelectKey();
+      } catch (e) {
+        console.error("Failed to select key:", e);
+      }
+    } else {
+      alert("API Key selection is not available in this environment.");
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -125,7 +138,37 @@ export const ConfigurationModal: React.FC<ConfigurationModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 md:p-8 flex flex-col min-h-0">
+        <div className="p-6 md:p-8 flex flex-col min-h-0 overflow-y-auto custom-scrollbar">
+          
+          {/* API Key Section */}
+          <div className="mb-8 p-4 border-4 border-bauhaus-black bg-gray-50">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <h3 className="text-lg font-bold uppercase mb-1 flex items-center gap-2">
+                  🔑 API Key Settings
+                </h3>
+                <p className="text-xs font-bold text-gray-500 max-w-md">
+                  "Resource Exhausted" (429 Error) が発生する場合は、こちらから有料プランのAPIキーを選択してください。
+                </p>
+                <a 
+                  href="https://ai.google.dev/gemini-api/docs/billing" 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="text-[10px] font-bold uppercase text-bauhaus-blue underline hover:text-bauhaus-black mt-1 inline-block"
+                >
+                  Google AI Studio 料金プランについて
+                </a>
+              </div>
+              <BauhausButton 
+                onClick={handleApiKeySelect}
+                variant="secondary"
+                className="text-sm py-2 px-4 whitespace-nowrap w-full md:w-auto"
+              >
+                APIキーを選択 / 変更
+              </BauhausButton>
+            </div>
+          </div>
+
           <div className="mb-4">
             <label className="block text-xl font-bold uppercase mb-1">スピーカーのボイスを選択</label>
             <p className="text-sm text-gray-600 font-bold uppercase">これらのボイスは多言語対応で、テキストに合わせて適応します。</p>

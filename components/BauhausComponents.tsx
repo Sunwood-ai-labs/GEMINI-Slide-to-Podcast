@@ -14,7 +14,9 @@ export const SquareIcon = ({ className }: { className?: string }) => (
 );
 
 export const TriangleIcon = ({ className }: { className?: string }) => (
-  <div className={`w-0 h-0 border-l-[15px] border-r-[15px] border-b-[26px] border-l-transparent border-r-transparent border-b-current ${className}`}></div>
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+    <path d="M12 2L22 22H2L12 2Z" />
+  </svg>
 );
 
 export const HalfCircleIcon = ({ className }: { className?: string }) => (

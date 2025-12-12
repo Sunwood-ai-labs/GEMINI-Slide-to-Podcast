@@ -103,33 +103,76 @@ function concatenateAudioBuffers(buffers: AudioBuffer[], context: AudioContext):
     return result;
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 // -- Internal helper for single speaker generation --
 async function generateSingleSpeakerAudio(text: string, voiceName: string): Promise<GeneratedAudio> {
     const ai = getClient();
     
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: text }] }],
-        config: {
-            responseModalities: [Modality.AUDIO],
-            speechConfig: {
-                voiceConfig: {
-                    prebuiltVoiceConfig: { voiceName: voiceName }
+    // Wrap text in a directive to ensure the model reads it instead of replying to it
+    const promptText = `Please read the following text exactly as written: "${text}"`;
+
+    const maxRetries = 10;
+    let attempt = 0;
+
+    while (true) {
+        try {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash-preview-tts",
+                contents: [{ parts: [{ text: promptText }] }],
+                config: {
+                    responseModalities: [Modality.AUDIO], 
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: voiceName }
+                        }
+                    },
+                },
+            });
+
+            const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            const textPart = response.candidates?.[0]?.content?.parts?.[0]?.text;
+
+            if (!base64Audio) {
+                if (textPart) {
+                     console.warn("Model returned text:", textPart);
+                     throw new Error(`Model returned text instead of audio: "${textPart.substring(0, 50)}..."`);
                 }
-            },
-        },
-    });
+                throw new Error("No audio data returned from API.");
+            }
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) throw new Error("No audio data returned.");
+            const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+            try {
+                const audioBytes = decode(base64Audio);
+                const audioBuffer = await decodeAudioData(audioBytes, outputAudioContext, 24000, 1);
+                return { buffer: audioBuffer, rawData: audioBytes };
+            } finally {
+                await outputAudioContext.close();
+            }
+        } catch (error: any) {
+            attempt++;
+            
+            // Check for rate limits (429) or temporary server errors
+            const errorMessage = JSON.stringify(error);
+            const isRateLimit = 
+                error.status === 429 || 
+                (error.error && error.error.code === 429) || 
+                errorMessage.includes("RESOURCE_EXHAUSTED") ||
+                errorMessage.includes("429") ||
+                errorMessage.includes("quota");
+            
+            const isServerBusy = error.status === 503 || error.status === 500;
 
-    const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    try {
-        const audioBytes = decode(base64Audio);
-        const audioBuffer = await decodeAudioData(audioBytes, outputAudioContext, 24000, 1);
-        return { buffer: audioBuffer, rawData: audioBytes };
-    } finally {
-        await outputAudioContext.close();
+            if ((isRateLimit || isServerBusy) && attempt <= maxRetries) {
+                // Exponential backoff
+                const delay = Math.pow(2, attempt) * 1000 + (Math.random() * 1000); 
+                console.warn(`API Error (${isRateLimit ? 'Rate Limit' : 'Server Error'}). Retrying in ${Math.round(delay)}ms... (Attempt ${attempt}/${maxRetries})`);
+                await sleep(delay);
+                continue;
+            }
+            
+            throw error;
+        }
     }
 }
 
@@ -139,7 +182,6 @@ export const generateSpeech = async (
   expertVoice?: string,
 ): Promise<GeneratedAudio> => {
   // Legacy multi-speaker support for raw text
-  // NOTE: This might be brittle with short texts, prefer generateSequencedSpeech
   const ai = getClient();
   const cleanText = text.replace(/\[(?:\*\*)?SLIDE\s+\d+(?:\*\*)?\]/gi, '').trim();
   const isScript = cleanText.includes('Host:') || cleanText.includes('Expert:');
@@ -185,42 +227,72 @@ export const generateSpeech = async (
 
 /**
  * Generates audio segment by segment to ensure perfect synchronization.
- * Uses Single Speaker config per segment to be robust against "non-audio response" errors.
+ * Optimized to merge consecutive segments by the same speaker to reduce API calls.
  */
 export const generateSequencedSpeech = async (
-    segments: ScriptSegment[],
+    rawSegments: ScriptSegment[],
     hostVoice: string,
     expertVoice: string
 ): Promise<{ audio: GeneratedAudio, segments: ScriptSegment[] }> => {
     
+    // 1. Merge consecutive segments from same speaker within same slide
+    // This reduces the number of API calls significantly, preventing rate limits
+    const mergedSegments: ScriptSegment[] = [];
+    if (rawSegments.length > 0) {
+        let current = { ...rawSegments[0] };
+        for (let i = 1; i < rawSegments.length; i++) {
+            const next = rawSegments[i];
+            // Merge if speaker AND slide index are the same
+            if (next.speaker === current.speaker && next.slideIndex === current.slideIndex) {
+                current.text += " " + next.text;
+                // We don't update ID as the new segment represents the block
+            } else {
+                mergedSegments.push(current);
+                current = { ...next };
+            }
+        }
+        mergedSegments.push(current);
+    }
+
     const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     const audioBuffers: AudioBuffer[] = [];
-    const updatedSegments: ScriptSegment[] = [];
+    const finalSegments: ScriptSegment[] = [];
     
     let currentOffset = 0;
 
     try {
-        // Generate sequentially to avoid rate limits and ensure order
-        for (const segment of segments) {
+        // Generate sequentially
+        for (const segment of mergedSegments) {
             const speaker = segment.speaker;
             const text = segment.text.trim();
             if (!text) continue;
 
             const voiceName = speaker === 'Host' ? hostVoice : expertVoice;
             
-            // Use Single Speaker generation for robustness
-            const audioResult = await generateSingleSpeakerAudio(text, voiceName);
-            
-            const duration = audioResult.buffer.duration;
-            audioBuffers.push(audioResult.buffer);
-            
-            updatedSegments.push({
-                ...segment,
-                startTime: currentOffset,
-                endTime: currentOffset + duration
-            });
-            
-            currentOffset += duration;
+            // Add pacing delay to avoid hitting rate limits (e.g. 15 RPM)
+            // Even with merging, we want to be gentle.
+            if (audioBuffers.length > 0) {
+                 await sleep(1000); 
+            }
+
+            try {
+                const audioResult = await generateSingleSpeakerAudio(text, voiceName);
+                
+                const duration = audioResult.buffer.duration;
+                audioBuffers.push(audioResult.buffer);
+                
+                finalSegments.push({
+                    ...segment,
+                    startTime: currentOffset,
+                    endTime: currentOffset + duration
+                });
+                
+                currentOffset += duration;
+            } catch (e) {
+                console.error(`Failed to generate audio for segment: "${text.substring(0, 20)}..."`, e);
+                // Fail gracefully? For now, throw to alert user.
+                throw e;
+            }
         }
 
         if (audioBuffers.length === 0) {
@@ -244,7 +316,7 @@ export const generateSequencedSpeech = async (
                 buffer: combinedBuffer,
                 rawData: new Uint8Array(rawData.buffer)
             },
-            segments: updatedSegments
+            segments: finalSegments
         };
 
     } finally {
